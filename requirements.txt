@@ -1,3 +1,4 @@
 
 pip install fastapi uvicorn
 pip install sqlalchemy psycopg2-binary
+python-jose passlib email-validator

@@ -1,7 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker,declarative_base
 
-DATABASE_URL="postgresql://postgres:password@localhost:5432/nodo_ai"
+DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/nodo_ai"
+
 
 engine = create_engine(DATABASE_URL)
 

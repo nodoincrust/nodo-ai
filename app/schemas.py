@@ -30,7 +30,7 @@ class CompanyResponseSchema(BaseModel):
     name: str
     contact_person: str
     contact_email: EmailStr
-    status: str
+    is_active: bool
     created_at: datetime
 
 class CreateUserSchema(BaseModel):
@@ -48,7 +48,7 @@ class UserResponseSchema(BaseModel):
     role: str
     department_id: Optional[int]
     reports_to: Optional[int]
-    status: str
+    is_active: bool
     created_at: datetime
 
 
@@ -97,5 +97,8 @@ class AddCommentSchema(BaseModel):
 
 
 class ApprovalActionSchema(BaseModel):
-    status: str  # APPROVED / REJECTED
+    is_active: bool  
     remarks: Optional[str] = None
+
+class UpdateCompanyStatusSchema(BaseModel):
+    is_active:bool

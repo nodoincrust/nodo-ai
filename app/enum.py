@@ -4,14 +4,10 @@ from enum import Enum
 class UserRole(str, Enum):
     SYSTEM_ADMIN = "SYSTEM_ADMIN"
     COMPANY_ADMIN = "COMPANY_ADMIN"
-    HEAD = "HEAD"
+    DEPARTMENT_HEAD = "DEPARTMENT_HEAD"
     MANAGER = "MANAGER"
     USER = "USER"
 
-
-class UserStatus(str, Enum):
-    ACTIVE = "ACTIVE"
-    INACTIVE = "INACTIVE"
 
 
 class DocumentStatus(str, Enum):

@@ -32,6 +32,7 @@ class CompanyResponseSchema(BaseModel):
     contact_email: EmailStr
     is_active: bool
     created_at: datetime
+    is_delete:bool
 
 class CreateUserSchema(BaseModel):
     name: str = Field(..., max_length=255)

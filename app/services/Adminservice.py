@@ -9,23 +9,16 @@ from app.enum import UserRole
 from app.schemas import CreateCompanySchema
 from app.helpers import otp_generate, otp_expiry, send_otp_email
 
+SECRET_KEY = os.getenv("JWT_SECRET")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+print("JWT_SECRET =", os.getenv("JWT_SECRET"))
+if not SECRET_KEY:
+    raise RuntimeError("JWT_SECRET is not set")
 
-SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret-key")
-ALGORITHM = os.getenv("ALGORITHM","HS256")
-
-
-
-def request_otp_service(
-    email: str,
-    background_tasks: BackgroundTasks,
-    db: Session,
-):
+def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Session):
     user = (
         db.query(User)
-        .filter(
-            User.email == email,
-            User.is_active.is_(True),
-        )
+        .filter(User.email == email, User.is_active.is_(True))
         .first()
     )
 
@@ -34,7 +27,7 @@ def request_otp_service(
 
     db.query(OTPLogin).filter(
         OTPLogin.user_id == user.id,
-        OTPLogin.is_used.is_(False),
+        OTPLogin.is_used.is_(False)
     ).update({"is_used": True})
 
     otp = otp_generate()
@@ -42,7 +35,7 @@ def request_otp_service(
     otp_entry = OTPLogin(
         user_id=user.id,
         otp_code=otp,
-        expires_at=otp_expiry(),
+        expires_at=otp_expiry()
     )
 
     db.add(otp_entry)
@@ -52,18 +45,10 @@ def request_otp_service(
 
     return {"message": "OTP sent successfully"}
 
-
-def verify_otp_service(
-    email: str,
-    otp: str,
-    db: Session,
-):
+def verify_otp_service(email: str, otp: str, db: Session):
     user = (
         db.query(User)
-        .filter(
-            User.email == email,
-            User.is_active.is_(True),
-        )
+        .filter(User.email == email, User.is_active.is_(True))
         .first()
     )
 
@@ -76,7 +61,7 @@ def verify_otp_service(
             OTPLogin.user_id == user.id,
             OTPLogin.otp_code == otp,
             OTPLogin.is_used.is_(False),
-            OTPLogin.expires_at > datetime.utcnow(),
+            OTPLogin.expires_at > datetime.utcnow()
         )
         .order_by(OTPLogin.created_at.desc())
         .first()
@@ -93,53 +78,54 @@ def verify_otp_service(
         {
             "user_id": user.id,
             "company_id": user.company_id,
-            "role": user.role.value,
+            "role": user.role.value
         },
         SECRET_KEY,
-        algorithm=ALGORITHM,
+        algorithm=ALGORITHM
     )
 
     return {"token": token}
 
-
-
 def create_company_service(
     payload: CreateCompanySchema,
-    db: Session, current_user: dict,
+    db: Session,
+    current_user: dict
 ):
     try:
         if db.query(Company).filter(
-            Company.contact_email == payload.contact_email
+            Company.contact_email == payload.contact_email,
+            Company.is_delete.is_(False)
         ).first():
             raise HTTPException(
                 status_code=400,
-                detail="Company with this email already exists",
+                detail="Company with this email already exists"
             )
 
         if db.query(User).filter(
-            User.email == payload.contact_email
+            User.email == payload.contact_email,
+            User.is_delete.is_(False)
         ).first():
             raise HTTPException(
                 status_code=400,
-                detail="User with this email already exists",
+                detail="User with this email already exists"
             )
 
         company = Company(
             name=payload.name,
             contact_person=payload.contact_person,
             contact_email=payload.contact_email,
-           created_by=current_user["user_id"],
+            created_by=current_user["user_id"]
         )
 
         db.add(company)
-        db.flush()  
+        db.flush()  # get company.id
 
         user = User(
             company_id=company.id,
             name=payload.contact_person,
             email=payload.contact_email,
             role=UserRole.COMPANY_ADMIN,
-            is_active=True,
+            is_active=True
         )
 
         db.add(user)
@@ -147,7 +133,7 @@ def create_company_service(
 
         return {
             "company_id": company.id,
-            "company_admin_user_id": user.id,
+            "company_admin_user_id": user.id
         }
 
     except HTTPException:
@@ -158,42 +144,55 @@ def create_company_service(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+def list_companies_service(
+    db: Session,
+    current_user: dict,
+    page: int = 1,
+    size: int = 10
+):
+    offset = (page - 1) * size
 
-def list_companies_service(db:Session,current_user:dict,page:int =1 , size:int=10):
-       offset = (page - 1) * size
-       
-       total = (
+    total = (
         db.query(Company)
-        .filter(Company.created_by == current_user["user_id"])
+        .filter(
+            Company.created_by == current_user["user_id"],
+            Company.is_delete.is_(False)
+        )
         .count()
-       )
-       companies = (
+    )
+
+    companies = (
         db.query(Company)
-        .filter(Company.created_by == current_user["user_id"])
+        .filter(
+            Company.created_by == current_user["user_id"],
+            Company.is_delete.is_(False)
+        )
         .order_by(Company.created_at.desc())
         .offset(offset)
         .limit(size)
         .all()
-       )
-    
-       return {
+    )
+
+    return {
         "page": page,
         "size": size,
         "total": total,
-        "data": companies,
-      }
-       
-       
+        "data": companies
+    }
+
 def updateStatusCompany(
     companyId: int,
     is_active: bool,
     db: Session,
     user: dict
 ):
-    company = db.query(Company).filter(Company.id == companyId).first()
+    company = db.query(Company).filter(
+        Company.id == companyId,
+        Company.is_delete.is_(False)
+    ).first()
 
     if not company:
-        raise HTTPException(status_code=404, detail="Company not found!")
+        raise HTTPException(status_code=404, detail="Company not found")
 
     company.is_active = is_active
     db.commit()
@@ -202,5 +201,44 @@ def updateStatusCompany(
     return {
         "status": 200,
         "detail": "Company status updated successfully",
-        "data": company,
+        "data": company
     }
+
+
+def delete_company_service(companyId: int, db: Session, user: dict):
+    company = db.query(Company).filter(
+        Company.id == companyId,
+        Company.is_delete.is_(False)
+    ).first()
+
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    try:
+        company.is_delete = True
+        company.is_active = False
+
+        db.query(User).filter(
+            User.company_id == company.id,
+            User.is_active.is_(True)
+        ).update(
+            {
+                "is_active": False,
+                "is_delete": True
+            },
+            synchronize_session=False
+        )
+
+        db.commit()
+
+        return {
+            "status": 200,
+            "detail": "Company and associated users deleted successfully"
+        }
+
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete company"
+        )

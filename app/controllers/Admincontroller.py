@@ -5,6 +5,7 @@ from app.services.Adminservice import (
     create_company_service,
     list_companies_service,
     updateStatusCompany,
+    delete_company_service
 )
 from app.db import SessionLocal
 from app.schemas import VerifyOTPSchema, CreateCompanySchema, UpdateCompanyStatusSchema
@@ -83,3 +84,11 @@ def updCompanyStatus(
         companyId=companyId, is_active=payload.is_active, db=db, user=user
     )
 
+
+@router.put("/deleteCompany/{companyId}")
+def delete_company(companyId:int,db: Session = Depends(get_db),user=Depends(get_current_user)):
+    
+    if user["role"] != UserRole.SYSTEM_ADMIN.value:
+        raise HTTPException(status_code=403,detail="Unauthorized access!")
+    
+    return delete_company_service(companyId=companyId,db=db,user=user)

@@ -32,6 +32,7 @@ class User(Base):
 
     role = Column(Enum(UserRole, name="user_role_enum"), nullable=False, index=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
+    is_delete=Column(Boolean,default=False,nullable=False,index=True)
 
 
     department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=True)
@@ -64,7 +65,7 @@ class Company(Base):
     id = Column(BigInteger, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     contact_person = Column(String(255))
-    contact_email = Column(String(255), unique=True, nullable=False)
+    contact_email = Column(String(255), unique=False, nullable=False)
 
     created_by = Column(
         BigInteger,
@@ -74,6 +75,7 @@ class Company(Base):
     )
 
     is_active = Column(Boolean, default=True, nullable=False, index=True)
+    is_delete = Column(Boolean,default=False,nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     users = relationship(

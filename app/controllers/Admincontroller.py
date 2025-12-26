@@ -5,10 +5,11 @@ from app.services.Adminservice import (
     create_company_service,
     list_companies_service,
     updateStatusCompany,
-    delete_company_service
+    delete_company_service,
+    update_company_details
 )
 from app.db import SessionLocal
-from app.schemas import VerifyOTPSchema, CreateCompanySchema, UpdateCompanyStatusSchema
+from app.schemas import VerifyOTPSchema, CreateCompanySchema, UpdateCompanyStatusSchema,UpdateCompanySchema
 from sqlalchemy.orm import Session
 from app.helpers import get_current_user
 from app.enum import UserRole
@@ -92,3 +93,15 @@ def delete_company(companyId:int,db: Session = Depends(get_db),user=Depends(get_
         raise HTTPException(status_code=403,detail="Unauthorized access!")
     
     return delete_company_service(companyId=companyId,db=db,user=user)
+
+
+@router.put("/updateCompanyDetails/{companyId}")
+def update_company(companyId:int,payload: UpdateCompanySchema,db: Session = Depends(get_db),user=Depends(get_current_user)):
+    
+    if user["role"] != UserRole.SYSTEM_ADMIN.value:
+        
+        raise HTTPException(
+            status_code=403,
+            detail="Unauthorized access!"
+        )
+    return update_company_details(companyId=companyId, payload=payload,db=db,user=user)

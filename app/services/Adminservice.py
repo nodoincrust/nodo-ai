@@ -6,7 +6,7 @@ import os
 
 from app.models import User, OTPLogin, Company
 from app.enum import UserRole
-from app.schemas import CreateCompanySchema
+from app.schemas import CreateCompanySchema,UpdateCompanySchema
 from app.helpers import otp_generate, otp_expiry, send_otp_email
 
 SECRET_KEY = os.getenv("JWT_SECRET")
@@ -151,7 +151,7 @@ def list_companies_service(
     size: int = 10
 ):
     offset = (page - 1) * size
-
+    print(current_user)
     total = (
         db.query(Company)
         .filter(
@@ -241,4 +241,75 @@ def delete_company_service(companyId: int, db: Session, user: dict):
         raise HTTPException(
             status_code=500,
             detail="Failed to delete company"
+        )
+
+def update_company_details(companyId:int,payload:UpdateCompanySchema,db:Session,user:dict):
+    company=db.query(Company).filter(
+        Company.id==companyId,
+        Company.is_delete.is_(False)
+    ).first()
+    
+    if not company:
+        raise HTTPException(
+            status_code=404, detail="Company not found"
+        )
+    company_admin=db.query(User).filter(
+        User.company_id==companyId,
+        User.role==UserRole.COMPANY_ADMIN,
+        User.is_delete.is_(False)
+    ).first()
+    
+    if not company_admin:
+        raise HTTPException(
+            status_code=404,
+            detail="Company admin user not found"
+        )
+        
+    if payload.name is not None:
+        company.name=payload.name
+    
+    if payload.contact_person is not None:
+        company.contact_person=payload.contact_person
+        company_admin.name=payload.contact_person
+        
+    if payload.contact_email is not None:
+        company_exist=db.query(Company).filter(
+            Company.contact_email==payload.contact_email,
+            Company.id !=companyId,
+            Company.is_delete.is_(False)
+        ).first()
+        
+        if company_exist:
+            raise HTTPException(
+                status_code=400,
+                detail="Company with this email already exists"
+            )
+        user_exists = db.query(User).filter(
+            User.email == payload.contact_email,
+            User.id != company_admin.id,
+            User.is_delete.is_(False)
+        ).first()
+
+        if user_exists:
+            raise HTTPException(
+                status_code=400,
+                detail="User with this email already exists"
+            )
+        
+        company.contact_email = payload.contact_email
+        company_admin.email = payload.contact_email  
+    try:
+        db.commit()
+        db.refresh(company)
+        
+        return {
+             "status": 200,
+            "detail": "Company and admin user updated successfully",
+            "data": company
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update company details"
         )

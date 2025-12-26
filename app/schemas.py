@@ -59,8 +59,9 @@ class UserResponseSchema(BaseModel):
 
 class CreateDepartmentSchema(BaseModel):
     name: str = Field(..., max_length=255)
-    reporting_department_id: Optional[int] = None
-
+    contact_person: str = Field(..., max_length=255)
+    contact_email: EmailStr
+    contact:str=Field(...,max_length=10)
 
 class DepartmentResponseSchema(BaseModel):
     id: int
@@ -107,3 +108,12 @@ class ApprovalActionSchema(BaseModel):
 
 class UpdateCompanyStatusSchema(BaseModel):
     is_active:bool
+    
+class UpdateDeptStatusSchema(BaseModel):
+     is_active:bool
+    
+class UpdateDeptSchema(BaseModel):
+    name: str
+    contact_person: str
+    contact_email:EmailStr
+    contact:str=Field(...,max_length=10)

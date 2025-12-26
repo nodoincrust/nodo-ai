@@ -5,7 +5,7 @@ from jose import jwt
 import os
 from sqlalchemy import or_,func
 from app.models import User, OTPLogin, Company
-from app.enum import UserRole
+from app.enum import UserRole,SIDEBAR_MENU
 from app.schemas import CreateCompanySchema,UpdateCompanySchema
 from app.helpers import otp_generate, otp_expiry, send_otp_email
 
@@ -83,8 +83,9 @@ def verify_otp_service(email: str, otp: str, db: Session):
         SECRET_KEY,
         algorithm=ALGORITHM
     )
+    sidebar = SIDEBAR_MENU.get(user.role, [])
 
-    return {"token": token}
+    return {"token": token,"sidebar":sidebar}
 
 def create_company_service(
     payload: CreateCompanySchema,
@@ -151,7 +152,6 @@ def list_companies_service(
     size: int = 10
 ):
     offset = (page - 1) * size
-    print(current_user)
     total = (
         db.query(Company)
         .filter(
@@ -313,9 +313,6 @@ def update_company_details(companyId:int,payload:UpdateCompanySchema,db:Session,
             status_code=500,
             detail="Failed to update company details"
         )
-        
-from sqlalchemy import or_, func
-
 def search_companies(query, page, size, db, user):
     offset = (page - 1) * size
 

@@ -4,6 +4,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.controllers.Admincontroller import router as parentRoute
+from app.controllers.CompanyController import router as deptRoute
 
 app= FastAPI()
 app.add_middleware(
@@ -16,6 +17,7 @@ app.add_middleware(
     allow_headers=["*"],   
 )
 app.include_router(parentRoute)
+app.include_router(deptRoute)
 
 @app.get("/")
 def greet():

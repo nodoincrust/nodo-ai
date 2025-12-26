@@ -13,7 +13,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.db import Base
 
-from sqlalchemy import Column, BigInteger, String, DateTime, Enum
+from sqlalchemy import Column, BigInteger, String, DateTime, Enum,text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.db import Base
@@ -119,6 +119,11 @@ class Department(Base):
     company_id = Column(BigInteger, ForeignKey("companies.id"), nullable=False)
     name = Column(String(255), nullable=False)
     reporting_department_id = Column(
-        BigInteger, ForeignKey("departments.id"), nullable=True
+        BigInteger, ForeignKey("departments.id"), nullable=True,server_default=text("NULL")
     )
+    contact_person = Column(String(255))
+    contact=Column(String(255),unique=True,nullable=False)
+    contact_email = Column(String(255), unique=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    is_delete = Column(Boolean,default=False,nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)

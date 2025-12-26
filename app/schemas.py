@@ -41,6 +41,10 @@ class CreateUserSchema(BaseModel):
     department_id: Optional[int] = None
     reports_to: Optional[int] = None
 
+class UpdateCompanySchema(BaseModel):
+    name: str
+    contact_person: str
+    contact_email:EmailStr
 
 class UserResponseSchema(BaseModel):
     id: int

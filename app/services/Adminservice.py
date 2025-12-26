@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import HTTPException, BackgroundTasks
 from jose import jwt
 import os
-
+from sqlalchemy import or_,func
 from app.models import User, OTPLogin, Company
 from app.enum import UserRole
 from app.schemas import CreateCompanySchema,UpdateCompanySchema
@@ -313,3 +313,32 @@ def update_company_details(companyId:int,payload:UpdateCompanySchema,db:Session,
             status_code=500,
             detail="Failed to update company details"
         )
+        
+from sqlalchemy import or_, func
+
+def search_companies(query, page, size, db, user):
+    offset = (page - 1) * size
+
+    base_query = db.query(Company).filter(Company.is_delete.is_(False))
+
+    if query:
+        query = query.strip().lower()
+        search = f"%{query}%"
+
+        base_query = base_query.filter(
+            or_(
+                func.lower(Company.name).like(search),
+                func.lower(func.coalesce(Company.contact_person, "")).like(search)
+            )
+        )
+
+    print(
+        base_query.statement.compile(
+            compile_kwargs={"literal_binds": True}
+        )
+    )
+
+    companies = base_query.all()
+    print("RESULT COUNT:", len(companies))
+
+    return companies

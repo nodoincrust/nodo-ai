@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks,Query
 from app.services.Adminservice import (
     request_otp_service,
     verify_otp_service,
@@ -6,7 +6,8 @@ from app.services.Adminservice import (
     list_companies_service,
     updateStatusCompany,
     delete_company_service,
-    update_company_details
+    update_company_details,
+    search_companies
 )
 from app.db import SessionLocal
 from app.schemas import VerifyOTPSchema, CreateCompanySchema, UpdateCompanyStatusSchema,UpdateCompanySchema
@@ -105,3 +106,13 @@ def update_company(companyId:int,payload: UpdateCompanySchema,db: Session = Depe
             detail="Unauthorized access!"
         )
     return update_company_details(companyId=companyId, payload=payload,db=db,user=user)
+
+
+@router.get("/search")
+def search(query: str | None = Query(default=None, min_length=1),page: int = 1,size: int = 10,user=Depends(get_current_user),db: Session = Depends(get_db)):
+    if user["role"] != UserRole.SYSTEM_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Unauthorized access"
+        )
+    return search_companies(query=query, page=page,size=size,db=db, user=user)

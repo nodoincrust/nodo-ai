@@ -118,3 +118,17 @@ def get_employee_scoped(db: Session, emp_id: int, current_user: dict):
         raise HTTPException(404, "Employee not found or unauthorized")
 
     return employee
+
+
+def resolve_ui_role(current_user: dict):
+
+    if current_user["role"] == UserRole.SYSTEM_ADMIN:
+        return UserRole.SYSTEM_ADMIN
+
+    if current_user["role"] == UserRole.COMPANY_ADMIN:
+        return UserRole.COMPANY_ADMIN
+
+    if current_user.get("is_department_head"):
+        return UserRole.DEPARTMENT_HEAD
+
+    return UserRole.EMPLOYEE

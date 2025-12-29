@@ -7,7 +7,7 @@ from sqlalchemy import or_, func
 from app.models import User, OTPLogin, Company, Department
 from app.enum import UserRole, SIDEBAR_MENU
 from app.schemas import CreateCompanySchema, UpdateCompanySchema
-from app.helpers import otp_generate, otp_expiry, send_otp_email
+from app.helpers import otp_generate, otp_expiry, send_otp_email,resolve_ui_role
 
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
@@ -84,8 +84,10 @@ def verify_otp_service(email: str, otp: str, db: Session):
 
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-    sidebar = SIDEBAR_MENU.get(user.role, [])
-
+    
+    ui_role = resolve_ui_role(payload)
+    sidebar = SIDEBAR_MENU.get(ui_role, [])
+    print(ui_role)
     return {
         "token": token,
         "sidebar": sidebar,

@@ -4,7 +4,7 @@ from fastapi import HTTPException, BackgroundTasks
 from jose import jwt
 import os
 from sqlalchemy import or_,func
-from app.models import User, OTPLogin, Company
+from app.models import User, OTPLogin, Company,Department
 from app.enum import UserRole,SIDEBAR_MENU
 from app.schemas import CreateCompanySchema,UpdateCompanySchema
 from app.helpers import otp_generate, otp_expiry, send_otp_email
@@ -74,18 +74,34 @@ def verify_otp_service(email: str, otp: str, db: Session):
     user.last_login_at = datetime.utcnow()
     db.commit()
 
-    token = jwt.encode(
-        {
-            "user_id": user.id,
-            "company_id": user.company_id,
-            "role": user.role.value
-        },
-        SECRET_KEY,
-        algorithm=ALGORITHM
-    )
+    dept = db.query(Department).filter(
+        Department.head_user_id == user.id,
+        Department.company_id == user.company_id,
+        Department.is_active.is_(True),
+        Department.is_delete.is_(False)
+    ).first()
+
+    payload = {
+        "user_id": user.id,
+        "company_id": user.company_id,
+        "role": user.role.value,
+
+        "is_department_head": bool(dept),
+        "department_id": dept.id if dept else None,
+    }
+
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
     sidebar = SIDEBAR_MENU.get(user.role, [])
 
-    return {"token": token,"sidebar":sidebar}
+    return {
+        "token": token,
+        "sidebar": sidebar,
+
+        "is_department_head": payload["is_department_head"],
+        "department_id": payload["department_id"]
+    }
+
 
 def create_company_service(
     payload: CreateCompanySchema,

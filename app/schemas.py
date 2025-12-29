@@ -109,11 +109,30 @@ class ApprovalActionSchema(BaseModel):
 class UpdateCompanyStatusSchema(BaseModel):
     is_active:bool
     
-class UpdateDeptStatusSchema(BaseModel):
-     is_active:bool
-    
-class UpdateDeptSchema(BaseModel):
+class CreateDepartmentSchema(BaseModel):
     name: str
-    contact_person: str
-    contact_email:EmailStr
-    contact:str=Field(...,max_length=10)
+    description: str | None = None
+    head_user_id: int | None = None
+
+class UpdateDeptSchema(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    head_user_id: int | None = None
+
+class UpdateDeptStatusSchema(BaseModel):
+    is_active: bool
+    
+class CreateEmployeeSchema(BaseModel):
+    name: str = Field(..., max_length=255)
+    email: EmailStr
+    department_id: Optional[int] = None
+    reports_to: Optional[int] = None
+
+class UpdateEmployeeSchema(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    department_id: Optional[int] = None
+    reports_to: Optional[int] = None
+    
+class UpdateEmployeeStatusSchema(BaseModel):
+    is_active: bool

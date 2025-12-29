@@ -115,15 +115,28 @@ class OTPLogin(Base):
 class Department(Base):
     __tablename__ = "departments"
 
-    id = Column(BigInteger, primary_key=True)
-    company_id = Column(BigInteger, ForeignKey("companies.id"), nullable=False)
-    name = Column(String(255), nullable=False)
-    reporting_department_id = Column(
-        BigInteger, ForeignKey("departments.id"), nullable=True,server_default=text("NULL")
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    company_id = Column(
+        BigInteger,
+        ForeignKey("companies.id"),
+        nullable=False,
+        index=True
     )
-    contact_person = Column(String(255))
-    contact=Column(String(255),unique=True,nullable=False)
-    contact_email = Column(String(255), unique=False, nullable=False)
+
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    head_user_id = Column(
+        BigInteger,
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True
+    )
+
     is_active = Column(Boolean, default=True, nullable=False, index=True)
-    is_delete = Column(Boolean,default=False,nullable=False, index=True)
+    is_delete = Column(Boolean, default=False, nullable=False, index=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    head = relationship("User", foreign_keys=[head_user_id])

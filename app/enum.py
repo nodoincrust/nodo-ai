@@ -5,8 +5,7 @@ class UserRole(str, Enum):
     SYSTEM_ADMIN = "SYSTEM_ADMIN"
     COMPANY_ADMIN = "COMPANY_ADMIN"
     DEPARTMENT_HEAD = "DEPARTMENT_HEAD"
-    MANAGER = "MANAGER"
-    USER = "USER"
+    EMPLOYEE="EMPLOYEE"
 
 
 
@@ -44,13 +43,9 @@ SIDEBAR_MENU = {
         {"key": "users", "label": "Department Users", "path": "/users/department"},
     ],
 
-    UserRole.MANAGER: [
-        {"key": "dashboard", "label": "Dashboard", "path": "/dashboard"},
-        {"key": "my_docs", "label": "My Documents", "path": "/documents/my"},
-        {"key": "approvals", "label": "Approvals", "path": "/approvals"},
-    ],
+   
 
-    UserRole.USER: [
+    UserRole.EMPLOYEE: [
         {"key": "dashboard", "label": "Dashboard", "path": "/dashboard"},
         {"key": "my_docs", "label": "My Documents", "path": "/documents/my"},
     ],

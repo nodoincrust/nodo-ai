@@ -22,7 +22,7 @@ from app.schemas import (
     UpdateEmployeeStatusSchema,
 )
 from sqlalchemy.orm import Session
-from app.helpers import get_current_user
+from app.helpers import get_current_user,employee_manage_guard
 from app.enum import UserRole
 
 router = APIRouter(prefix="/nodo/company")
@@ -125,10 +125,7 @@ def add_employee(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user["role"] != UserRole.COMPANY_ADMIN.value and not current_user.get(
-        "is_department_head"
-    ):
-        raise HTTPException(status_code=403, detail="Unauthorized access")
+    employee_manage_guard(current_user)
 
     return add_employee_service(payload, db, current_user)
 
@@ -140,10 +137,7 @@ def update_employee(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user["role"] != UserRole.COMPANY_ADMIN.value and not current_user.get(
-        "is_department_head"
-    ):
-        raise HTTPException(403, "Unauthorized access")
+    employee_manage_guard(current_user)
 
     return update_employee_service(employee_id, payload, db, current_user)
 
@@ -153,10 +147,7 @@ def delete_Employee(
     empId: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
 
-    if current_user["role"] != UserRole.COMPANY_ADMIN.value and not current_user.get(
-        "is_department_head"
-    ):
-        raise HTTPException(403, "Unauthorized access")
+    employee_manage_guard(current_user)
 
     return delete_employee_details(empId=empId, db=db, current_user=current_user)
 
@@ -168,10 +159,7 @@ def updDeptStatusEmp(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if current_user["role"] != UserRole.COMPANY_ADMIN.value and not current_user.get(
-        "is_department_head"
-    ):
-        raise HTTPException(403, "Unauthorized access")
+    employee_manage_guard(current_user)
 
     return updateStatusEmployee(
         empId=empId, is_active=payload.is_active, db=db, current_user=current_user
@@ -187,10 +175,7 @@ def Emp_List(
     db: Session = Depends(get_db),
 ):
 
-    if current_user["role"] != UserRole.COMPANY_ADMIN.value and not current_user.get(
-        "is_department_head"
-    ):
-        raise HTTPException(403, "Unauthorized access")
+    employee_manage_guard(current_user)
 
     return get_employee_list(
         db=db, current_user=current_user, page=page, size=size, query=query

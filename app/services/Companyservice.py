@@ -7,6 +7,7 @@ from sqlalchemy import or_, func
 from app.models import User, OTPLogin, Company, Department
 from app.enum import UserRole
 from app.schemas import CreateDepartmentSchema, UpdateDeptSchema, UpdateEmployeeSchema
+from app.helpers import get_employee_scoped
 
 
 def add_dept_service(payload: CreateDepartmentSchema, db: Session, current_user: dict):
@@ -172,7 +173,9 @@ def update_dept_details(
         if not head_user:
             raise HTTPException(400, "Invalid department head user")
 
-        department.head_user_id = payload.head_user_id
+    head_user.department_id = department.id
+
+    department.head_user_id = payload.head_user_id
 
     try:
         db.commit()
@@ -209,7 +212,6 @@ def search_depts(query, page, size, db, user):
 
 def add_employee_service(payload, db: Session, current_user: dict):
 
-    # Email uniqueness
     existing_user = (
         db.query(User)
         .filter(User.email == payload.email, User.is_delete.is_(False))
@@ -219,13 +221,14 @@ def add_employee_service(payload, db: Session, current_user: dict):
     if existing_user:
         raise HTTPException(400, "User with this email already exists")
 
-    # Decide department
     if current_user["role"] == UserRole.COMPANY_ADMIN.value:
+        if not payload.department_id:
+            raise HTTPException(400, "department_id is required")
         department_id = payload.department_id
     else:
         department_id = current_user["department_id"]
 
-    # Validate department
+
     if department_id:
         dept = (
             db.query(Department)
@@ -240,7 +243,6 @@ def add_employee_service(payload, db: Session, current_user: dict):
         if not dept:
             raise HTTPException(400, "Invalid department")
 
-    # Validate manager (optional)
     if payload.reports_to:
         if payload.reports_to == current_user["user_id"]:
             raise HTTPException(400, "User cannot report to themselves")
@@ -264,7 +266,6 @@ def add_employee_service(payload, db: Session, current_user: dict):
                     403, "You can assign reporting manager only from your department"
                 )
 
-    # Create employee
     user = User(
         name=payload.name,
         email=payload.email,
@@ -289,22 +290,8 @@ def add_employee_service(payload, db: Session, current_user: dict):
 def update_employee_service(
     employee_id: int, payload: UpdateEmployeeSchema, db: Session, current_user: dict
 ):
-    employee = (
-        db.query(User)
-        .filter(
-            User.id == employee_id,
-            User.company_id == current_user["company_id"],
-            User.is_delete.is_(False),
-        )
-        .first()
-    )
+    employee = get_employee_scoped(db, employee_id, current_user)
 
-    if not employee:
-        raise HTTPException(404, "Employee not found")
-
-    if current_user.get("is_department_head"):
-        if employee.department_id != current_user["department_id"]:
-            raise HTTPException(403, "Unauthorized access")
 
     if payload.name is not None:
         employee.name = payload.name
@@ -376,24 +363,8 @@ def update_employee_service(
 
 def delete_employee_details(empId: int, db: Session, current_user: dict):
 
-    employee = (
-        db.query(User)
-        .filter(
-            User.id == empId,
-            User.company_id == current_user["company_id"],
-            User.role == UserRole.EMPLOYEE,
-            User.is_delete.is_(False),
-        )
-        .first()
-    )
+    employee = get_employee_scoped(db, empId, current_user)
 
-    if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
-
-    # 🔐 Department head scope check
-    if current_user.get("is_department_head"):
-        if employee.department_id != current_user["department_id"]:
-            raise HTTPException(status_code=403, detail="Unauthorized access")
 
     try:
         employee.is_delete = True
@@ -410,18 +381,8 @@ def delete_employee_details(empId: int, db: Session, current_user: dict):
 
 def updateStatusEmployee(empId: int, is_active: bool, db: Session, current_user: dict):
 
-    employee = (
-        db.query(User)
-        .filter(
-            User.id == empId,
-            User.company_id == current_user["company_id"],
-            User.is_delete.is_(False),
-        )
-        .first()
-    )
+    employee = get_employee_scoped(db, empId, current_user)
 
-    if not employee:
-        raise HTTPException(404, "Employee not found")
 
     employee.is_active = is_active
 
@@ -445,6 +406,7 @@ def get_employee_list(
     ).filter(
         User.company_id == current_user["company_id"],
         User.is_delete.is_(False),
+        User.role == UserRole.EMPLOYEE,
         User.id != current_user["user_id"],
     )
 

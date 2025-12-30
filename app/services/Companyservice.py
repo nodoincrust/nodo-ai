@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from datetime import datetime
 from fastapi import HTTPException, BackgroundTasks
 from jose import jwt
@@ -58,9 +58,13 @@ def get_dept_list(db: Session, current_user: dict, page: int, size: int):
 
     offset = (page - 1) * size
 
-    base_query = db.query(Department).filter(
-        Department.company_id == current_user["company_id"],
-        Department.is_delete.is_(False),
+    base_query = (
+        db.query(Department)
+        .options(joinedload(Department.head))
+        .filter(
+            Department.company_id == current_user["company_id"],
+            Department.is_delete.is_(False),
+        )
     )
 
     total = base_query.count()
@@ -72,7 +76,25 @@ def get_dept_list(db: Session, current_user: dict, page: int, size: int):
         .all()
     )
 
-    return {"page": page, "size": size, "total": total, "data": departments}
+    return {
+        "page": page,
+        "size": size,
+        "total": total,
+        "data": [
+            {
+                "id": d.id,
+                "company_id": d.company_id,
+                "name": d.name,
+                "description": d.description,
+                "head_user_id": d.head_user_id,
+                "head_name": d.head.name if d.head else None,
+                "is_active": d.is_active,
+                "is_delete": d.is_delete,
+                "created_at": d.created_at,
+            }
+            for d in departments
+        ],
+    }
 
 
 def updateStatusDept(deptId: int, is_active: bool, db: Session, current_user: dict):
@@ -228,7 +250,6 @@ def add_employee_service(payload, db: Session, current_user: dict):
     else:
         department_id = current_user["department_id"]
 
-
     if department_id:
         dept = (
             db.query(Department)
@@ -272,6 +293,7 @@ def add_employee_service(payload, db: Session, current_user: dict):
         company_id=current_user["company_id"],
         department_id=department_id,
         reports_to=payload.reports_to,
+        designation=payload.designation,
         role=UserRole.EMPLOYEE,
         is_active=True,
     )
@@ -291,7 +313,6 @@ def update_employee_service(
     employee_id: int, payload: UpdateEmployeeSchema, db: Session, current_user: dict
 ):
     employee = get_employee_scoped(db, employee_id, current_user)
-
 
     if payload.name is not None:
         employee.name = payload.name
@@ -351,6 +372,15 @@ def update_employee_service(
 
         employee.reports_to = payload.reports_to
 
+        if payload.designation is not None:
+            if current_user["role"] != UserRole.COMPANY_ADMIN.value:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only company admin can update designation",
+                )
+
+        employee.designation = payload.designation
+
     db.commit()
     db.refresh(employee)
 
@@ -364,7 +394,6 @@ def update_employee_service(
 def delete_employee_details(empId: int, db: Session, current_user: dict):
 
     employee = get_employee_scoped(db, empId, current_user)
-
 
     try:
         employee.is_delete = True
@@ -382,7 +411,6 @@ def delete_employee_details(empId: int, db: Session, current_user: dict):
 def updateStatusEmployee(empId: int, is_active: bool, db: Session, current_user: dict):
 
     employee = get_employee_scoped(db, empId, current_user)
-
 
     employee.is_active = is_active
 
@@ -402,7 +430,12 @@ def get_employee_list(
     offset = (page - 1) * size
 
     base_query = db.query(
-        User.id, User.name, User.email, User.is_active, User.department_id
+        User.id,
+        User.name,
+        User.email,
+        User.is_active,
+        User.department_id,
+        User.designation,
     ).filter(
         User.company_id == current_user["company_id"],
         User.is_delete.is_(False),
@@ -438,6 +471,7 @@ def get_employee_list(
                 "email": e.email,
                 "is_active": e.is_active,
                 "department_id": e.department_id,
+                "role": e.designation,
             }
             for e in employees
         ],

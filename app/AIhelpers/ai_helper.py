@@ -6,20 +6,22 @@ from app.services.chat_service import chat_with_session
 
 
 def handle_chat(session_id: str, query: str) -> dict:
-   
+
     return chat_with_session(session_id, query)
 
 
 def handle_chat_stream(session_id: str, query: str) -> Generator[str, None, None]:
-    
+
     return chat_stream(session_id, query)
 
 
-def handle_chat_with_citation(session_id: str, query: str, document_id: Optional[str] = None) -> dict:
-   
+def handle_chat_with_citation(
+    session_id: str, query: str, document_id: Optional[str] = None
+) -> dict:
+
     return chat_with_session(session_id, query, document_id)
 
 
 def handle_summary(document_id: str) -> dict:
-    
+
     return summarize_doc(document_id)

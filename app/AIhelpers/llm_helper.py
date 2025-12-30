@@ -127,15 +127,10 @@ def ask_llm(context: str, question: str) -> dict:
         "stream": False,
     }
 
-    res = requests.post(OLLAMA_URL, json=payload) # timeout=120
+    res = requests.post(OLLAMA_URL, json=payload)  # timeout=120
     res.raise_for_status()
 
-    return {
-        "status": "success",
-        "data": {
-            "answer": res.json()["message"]["content"]
-        }
-    }
+    return {"status": "success", "data": {"answer": res.json()["message"]["content"]}}
 
 
 def ask_llm_stream(context: str, question: str) -> Iterable[str]:
@@ -157,4 +152,3 @@ def ask_llm_stream(context: str, question: str) -> Iterable[str]:
             data = line.decode("utf-8")
             if '"content":"' in data:
                 yield data.split('"content":"')[1].split('"')[0]
-

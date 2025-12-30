@@ -20,12 +20,9 @@ def create_embedding(text: str) -> List[float]:
     if cached:
         return json.loads(cached)
 
-    payload = {
-        "model": MODEL,
-        "prompt": text
-    }
+    payload = {"model": MODEL, "prompt": text}
 
-    res = requests.post(NOMIC_URL, json=payload) # timeout=60
+    res = requests.post(NOMIC_URL, json=payload)  # timeout=60
     res.raise_for_status()
 
     vector = res.json()["embedding"]

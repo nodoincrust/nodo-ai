@@ -3,7 +3,11 @@ from typing import Generator, Optional
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models import (SessionMessages,SessionMemorySummery,DocuementChunks,)
+from app.models import (
+    SessionMessages,
+    SessionMemorySummery,
+    DocuementChunks,
+)
 
 from app.AIhelpers.embedding_helper import create_embedding
 from app.AIhelpers.llm_helper import ask_llm, ask_llm_stream
@@ -14,15 +18,15 @@ MAX_HISTORY = 6
 
 
 def _load_context(db: Session, session_id: str):
-    memory = db.query(SessionMemorySummery)\
-               .filter_by(session_id=session_id)\
-               .first()
+    memory = db.query(SessionMemorySummery).filter_by(session_id=session_id).first()
 
-    messages = db.query(SessionMessages)\
-                 .filter_by(session_id=session_id)\
-                 .order_by(SessionMessages.created_at.desc())\
-                 .limit(MAX_HISTORY)\
-                 .all()
+    messages = (
+        db.query(SessionMessages)
+        .filter_by(session_id=session_id)
+        .order_by(SessionMessages.created_at.desc())
+        .limit(MAX_HISTORY)
+        .all()
+    )
 
     return (memory.summary if memory else ""), list(reversed(messages))
 
@@ -43,12 +47,15 @@ def _retrieve_chunks(db: Session, query: str):
     context, citations = [], []
     for _, c in scored[:TOP_K]:
         context.append(c.chunk_text)
-        citations.append({
-            "document_id": str(c.document_id),
-            "chunk_index": c.chunk_index,
-        })
+        citations.append(
+            {
+                "document_id": str(c.document_id),
+                "chunk_index": c.chunk_index,
+            }
+        )
 
     return "\n".join(context), citations
+
 
 def chat_with_session(session_id: str, query: str) -> dict:
     repo = DBRepo()
@@ -96,7 +103,11 @@ def chat_stream(session_id: str, query: str) -> Generator[str, None, None]:
         repo.close()
 
 
-def chat_with_citation(session_id: str, query: str, document_id: Optional[str] = None,) -> dict:
+def chat_with_citation(
+    session_id: str,
+    query: str,
+    document_id: Optional[str] = None,
+) -> dict:
     repo = DBRepo()
     try:
         if not repo.session_exists(session_id):
@@ -118,10 +129,12 @@ def chat_with_citation(session_id: str, query: str, document_id: Optional[str] =
             )
             for c in chunks:
                 context_lines.append(c.chunk_text)
-                citations.append({
-                    "document_id": str(c.document_id),
-                    "chunk_index": c.chunk_index,
-                })
+                citations.append(
+                    {
+                        "document_id": str(c.document_id),
+                        "chunk_index": c.chunk_index,
+                    }
+                )
 
         context = "\n".join(context_lines)
         answer = ask_llm(context=context, question=query)

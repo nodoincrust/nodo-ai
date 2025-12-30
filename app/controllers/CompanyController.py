@@ -22,7 +22,7 @@ from app.schemas import (
     UpdateEmployeeStatusSchema,
 )
 from sqlalchemy.orm import Session
-from app.helpers import get_current_user,employee_manage_guard
+from app.helpers import get_current_user, employee_manage_guard
 from app.enum import UserRole
 
 router = APIRouter(prefix="/nodo/company")

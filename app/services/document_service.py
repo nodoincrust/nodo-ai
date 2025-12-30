@@ -17,7 +17,7 @@ def process_document(
     file_type: str,
     file_size_mb: float,
 ) -> dict:
-    """Full document ingestion pipeline """
+    """Full document ingestion pipeline"""
     db: Session = SessionLocal()
     try:
         # Store document metadata

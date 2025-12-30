@@ -5,20 +5,25 @@ from typing import Optional
 import tempfile
 import traceback
 
-from fastapi import (APIRouter,UploadFile,File,Form,HTTPException)
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.schemas import ChatRequest, CitationRequest
-from app.AIhelpers.ai_helper import (handle_chat,handle_chat_stream,handle_chat_with_citation,handle_summary)
+from app.AIhelpers.ai_helper import (
+    handle_chat,
+    handle_chat_stream,
+    handle_chat_with_citation,
+    handle_summary,
+)
 from app.services.ai_DBservice import create_chat_session
 from app.services.document_service import process_document
 
 router = APIRouter(prefix="/ai")
 
+
 @router.post("/upload")
 async def upload_document(
-    file: UploadFile = File(...),
-    session_id: Optional[str] = Form(None)
+    file: UploadFile = File(...), session_id: Optional[str] = Form(None)
 ):
     import tempfile
     import os
@@ -58,30 +63,29 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
-        #CLEANUP TEMP FILE
+        # CLEANUP TEMP FILE
         try:
             os.remove(temp_path)
         except Exception:
             pass
 
+
 @router.post("/chat")
 async def chat_api(request: ChatRequest):
     session_id = request.session_id or create_chat_session()
 
-    result = handle_chat(
-        session_id=session_id,
-        query=request.query
-    )
+    result = handle_chat(session_id=session_id, query=request.query)
 
     return {
         "session_id": session_id,
         "response": result["data"]["answer"],
-        "citations": result["data"].get("citations", [])
+        "citations": result["data"].get("citations", []),
     }
+
 
 # @router.post("/chat/stream")
 # async def chat_stream_api(request: ChatRequest):
-   
+
 #     session_id = request.session_id or create_chat_session()
 
 #     return StreamingResponse(
@@ -94,7 +98,7 @@ async def chat_api(request: ChatRequest):
 
 # @router.post("/chat/citation")
 # async def chat_with_citation_api(request: CitationRequest):
-    
+
 #     session_id = create_chat_session()
 
 #     return handle_chat_with_citation(

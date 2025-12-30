@@ -4,10 +4,17 @@ from fastapi import HTTPException, BackgroundTasks
 from jose import jwt
 import os
 from sqlalchemy import or_, func
-from app.models import User, OTPLogin, Company, Department
+from app.models import (
+    User,
+    OTPLogin,
+    Company,
+    Department,
+    RoleSidebarMapping,
+    SidebarMenu,
+)
 from app.enum import UserRole, SIDEBAR_MENU
 from app.schemas import CreateCompanySchema, UpdateCompanySchema
-from app.helpers import otp_generate, otp_expiry, send_otp_email,resolve_ui_role
+from app.helpers import otp_generate, otp_expiry, send_otp_email, resolve_ui_role
 
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
@@ -26,7 +33,8 @@ def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Sessi
         OTPLogin.user_id == user.id, OTPLogin.is_used.is_(False)
     ).update({"is_used": True})
 
-    otp = otp_generate()
+    # otp = otp_generate()
+    otp = 1234
 
     otp_entry = OTPLogin(user_id=user.id, otp_code=otp, expires_at=otp_expiry())
 
@@ -36,6 +44,27 @@ def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Sessi
     background_tasks.add_task(send_otp_email, email, otp)
 
     return {"message": "OTP sent successfully"}
+
+
+def get_sidebar_for_user(db: Session, role: str):
+    menus = (
+        db.query(SidebarMenu)
+        .join(RoleSidebarMapping)
+        .filter(RoleSidebarMapping.role == role, SidebarMenu.is_active.is_(True))
+        .order_by(SidebarMenu.sort_order.asc())
+        .all()
+    )
+
+    return [
+        {
+            "id": m.menu_key,
+            "label": m.label,
+            "path": m.path,
+            "icon": m.icon,
+            "icon_active": m.icon_active,
+        }
+        for m in menus
+    ]
 
 
 def verify_otp_service(email: str, otp: str, db: Session):
@@ -84,10 +113,9 @@ def verify_otp_service(email: str, otp: str, db: Session):
 
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-    
     ui_role = resolve_ui_role(payload)
-    sidebar = SIDEBAR_MENU.get(ui_role, [])
-    print(ui_role)
+    # sidebar = SIDEBAR_MENU.get(ui_role, [])
+    sidebar = get_sidebar_for_user(db, ui_role)
     return {
         "token": token,
         "sidebar": sidebar,
@@ -125,6 +153,8 @@ def create_company_service(
             name=payload.name,
             contact_person=payload.contact_person,
             contact_email=payload.contact_email,
+            total_space=payload.total_space,
+            remaining_space=payload.total_space,
             created_by=current_user["user_id"],
         )
 

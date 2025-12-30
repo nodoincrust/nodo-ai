@@ -1,7 +1,7 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field , ConfigDict
 from typing import Optional
 from datetime import datetime
-
+from uuid import UUID
 
 class RequestOTPSchema(BaseModel):
     email: EmailStr
@@ -136,3 +136,43 @@ class UpdateEmployeeSchema(BaseModel):
     
 class UpdateEmployeeStatusSchema(BaseModel):
     is_active: bool
+
+
+# ------------------------ AI schemas ------------------------
+class CreateSessionResponse(BaseModel):
+    session_id: str
+
+class ChatRequest(BaseModel):
+    session_id: Optional[str] = None
+    query: str
+
+class CitationRequest(BaseModel):
+    query: str
+    document_id: Optional[str] = None
+    
+class ChatResponse(BaseModel):
+    session_id:str
+    response: str
+
+class AskRequest(BaseModel):
+    question: str
+
+class AskTextPayload(BaseModel):
+    text: str
+    question: str
+    mode: str = "docuemnts"  # or "web"
+
+class UploadResponse(BaseModel):
+    document_id: str
+    chunks : int
+    message: str
+
+class AnswerResponse(BaseModel):
+    question: str
+    answer: str
+
+class SummeryResponse(BaseModel):
+    document_id: str
+    summary: str
+
+    model_config = ConfigDict(from_attributes=True)

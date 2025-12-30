@@ -5,8 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.controllers.Admincontroller import router as parentRoute
 from app.controllers.CompanyController import router as deptRoute
+from app.controllers.ai_controller import router as ai_router
 
-app= FastAPI()
+app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -18,6 +20,7 @@ app.add_middleware(
 )
 app.include_router(parentRoute)
 app.include_router(deptRoute)
+app.include_router(ai_router)
 
 @app.get("/")
 def greet():

@@ -2,3 +2,9 @@
 pip install fastapi uvicorn
 pip install sqlalchemy psycopg2-binary
 python-jose passlib email-validator
+
+pip install fastapi uvicorn sqlalchemy psycopg2-binary pgvector
+pip install pydantic python-multipart requests redis
+pip install duckduckgo-search
+
+python -m pip install pymupdf pytesseract pillow pdf2image

@@ -7,9 +7,10 @@ import traceback
 
 from fastapi import (APIRouter,UploadFile,File,Form,HTTPException)
 from fastapi.responses import StreamingResponse
-
-from app.schemas import ChatRequest, CitationRequest
-from app.AIhelpers.ai_helper import (handle_chat,handle_chat_stream,handle_chat_with_citation,handle_summary)
+from app.db import SessionLocal
+from app.models.ai_Model import Document
+from app.ai_schemas import ChatRequest, CitationRequest
+from app.AIhelpers.ai_helper import (handle_chat,handle_chat_stream,handle_summary)
 from app.services.ai_DBservice import create_chat_session
 from app.services.document_service import process_document
 
@@ -26,7 +27,24 @@ async def upload_document(
     import uuid
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        # preserve original extension so downstream format detection works correctly
+        _, ext = os.path.splitext(file.filename or '')
+        if not ext:
+            # fallback to using content-type hint
+            if file.content_type:
+                if 'pdf' in file.content_type:
+                    ext = '.pdf'
+                elif 'word' in file.content_type:
+                    ext = '.docx'
+                elif 'excel' in file.content_type:
+                    ext = '.xlsx'
+                elif 'image' in file.content_type:
+                    # default to jpg for generic images
+                    ext = '.jpg' or '.png' or '.jpeg' or '.webp'
+                else:
+                    ext = ''
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
             shutil.copyfileobj(file.file, tmp)
             temp_path = tmp.name
 
@@ -68,41 +86,42 @@ async def upload_document(
 async def chat_api(request: ChatRequest):
     session_id = request.session_id or create_chat_session()
 
+    if request.document_id:
+        validate_document(request.document_id)
+
+    if request.document_id and not request.query:
+        summary = handle_summary(request.document_id)
+        return {
+            "session_id": session_id,
+            "mode": "document_summary",
+            "response": summary["summary"]
+        }
     result = handle_chat(
         session_id=session_id,
-        query=request.query
+        query=request.query,
+        document_id=request.document_id
     )
 
     return {
         "session_id": session_id,
-        "response": result["data"]["answer"],
-        "citations": result["data"].get("citations", [])
+        "mode": "rag" if request.document_id else "chat",
+        "response": result["answer"],
+        "citations": result["citations"]
     }
 
-# @router.post("/chat/stream")
-# async def chat_stream_api(request: ChatRequest):
+
+@router.post("/chat/stream")
+async def chat_stream_api(request: ChatRequest):
    
-#     session_id = request.session_id or create_chat_session()
+    session_id = request.session_id or create_chat_session()
 
-#     return StreamingResponse(
-#         handle_chat_stream(
-#             session_id=session_id,
-#             query=request.query
-#         ),
-#         media_type="text/plain"
-#     )
-
-# @router.post("/chat/citation")
-# async def chat_with_citation_api(request: CitationRequest):
-    
-#     session_id = create_chat_session()
-
-#     return handle_chat_with_citation(
-#         session_id=session_id,
-#         query=request.query,
-#         document_id=request.document_id
-#     )
-
+    return StreamingResponse(
+        handle_chat_stream(
+            session_id=session_id,
+            query=request.query
+        ),
+        media_type="text/plain"
+    )
 
 @router.get("/summary/{document_id}")
 async def summarize_document(document_id: str):

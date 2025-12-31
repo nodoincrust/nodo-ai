@@ -2,7 +2,7 @@ from typing import Generator, Optional, List
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models.ai_Model import SessionMessages, SessionMemorySummery, DocuementChunks
+from app.models import SessionMessages, SessionMemorySummery, DocuementChunks
 from app.AIhelpers.embedding_helper import create_embedding
 from app.AIhelpers.llm_helper import ask_llm, ask_llm_stream
 # from services.background_tasks import maybe_update_memory

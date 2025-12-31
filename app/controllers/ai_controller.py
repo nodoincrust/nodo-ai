@@ -8,8 +8,8 @@ import traceback
 from fastapi import (APIRouter,UploadFile,File,Form,HTTPException)
 from fastapi.responses import StreamingResponse
 from app.db import SessionLocal
-from app.models.ai_Model import Document
-from app.ai_schemas import ChatRequest, CitationRequest
+from app.models import Document
+from app.schemas import ChatRequest, CitationRequest
 from app.AIhelpers.ai_helper import (handle_chat,handle_chat_stream,handle_summary)
 from app.services.ai_DBservice import create_chat_session
 from app.services.document_service import process_document

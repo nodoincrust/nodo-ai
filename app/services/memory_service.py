@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from app.models.ai_Model import SessionMessages, SessionMemorySummery
-from app.helpers.llm_helper import ask_llm
+from app.models import SessionMessages, SessionMemorySummery
+from app.AIhelpers.llm_helper import ask_llm
 
 
 def update_memory_summary(db: Session, session_id: str):

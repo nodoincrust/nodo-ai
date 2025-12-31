@@ -4,11 +4,11 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models.ai_Model import Document, DocuementChunks
-from app.helpers.pdf_helper import iter_pdf_pages, extract_pdf_text
-from app.helpers.format_helper import iter_file_pages
-from app.helpers.chunk_helper import chunk_text, chunk_text_from_pages
-from app.helpers.embedding_helper import create_embeddings, create_embedding, REDIS
+from app.models import Document, DocuementChunks
+from app.AIhelpers.pdf_helper import iter_pdf_pages, extract_pdf_text
+from app.AIhelpers.format_helper import iter_file_pages
+from app.AIhelpers.chunk_helper import chunk_text, chunk_text_from_pages
+from app.AIhelpers.embedding_helper import create_embeddings, create_embedding, REDIS
 
 logger = logging.getLogger("ai_modul.document_service")
 

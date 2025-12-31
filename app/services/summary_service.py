@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session
 import logging
 from app.db import SessionLocal
-from app.models.ai_Model import DocuementChunks, DocuemntSummery
-from app.helpers.llm_helper import ask_llm
-from app.helpers.embedding_helper import REDIS
+from app.models import DocuementChunks, DocuemntSummery
+from app.AIhelpers.llm_helper import ask_llm
+from app.AIhelpers.embedding_helper import REDIS
 
 logger = logging.getLogger("ai_modul.summary_service")
 

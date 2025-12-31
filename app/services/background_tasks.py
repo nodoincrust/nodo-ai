@@ -1,5 +1,5 @@
 from app.db import SessionLocal
-from app.models import SessionMessages
+from app.models.ai_Model import SessionMessages
 from app.services.memory_service import update_memory_summary
 
 TRIGGER_COUNT = 10

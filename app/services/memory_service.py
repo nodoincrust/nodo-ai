@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
-from app.models import SessionMessages, SessionMemorySummery
-from app.AIhelpers.llm_helper import ask_llm
+from app.models.ai_Model import SessionMessages, SessionMemorySummery
+from app.helpers.llm_helper import ask_llm
 
 
 def update_memory_summary(db: Session, session_id: str):
@@ -14,10 +14,14 @@ def update_memory_summary(db: Session, session_id: str):
 
     convo = "\n".join(f"{m.role}: {m.content}" for m in messages)
 
-    summary = ask_llm(
+    resp = ask_llm(
         context="Summarize conversation memory.",
         question=convo
-    )["data"]["answer"]
+    )
+    if resp.get("status") != "success":
+        # skip updating memory if LLM unavailable
+        return
+    summary = resp["data"]["answer"]
 
     existing = db.query(SessionMemorySummery)\
                  .filter_by(session_id=session_id)\

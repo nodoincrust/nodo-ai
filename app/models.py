@@ -170,6 +170,7 @@ class DocuementChunks(Base):
     chunk_index = Column(Integer, nullable=False)
     chunk_text = Column(Text, nullable=False)
     embedding = Column(Vector(EMBEDDING_DIMENSION), nullable=True)
+    page_number = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     document = relationship("Document", back_populates="chunks")

@@ -68,8 +68,16 @@ def get_sidebar_for_user(db: Session, role: str):
     ]
 
 
+from datetime import datetime, timedelta
+from fastapi import HTTPException
+from jose import jwt
+
 def verify_otp_service(email: str, otp: str, db: Session):
-    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+    user = (
+        db.query(User)
+        .filter(User.email == email, User.is_active.is_(True))
+        .first()
+    )
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -93,43 +101,52 @@ def verify_otp_service(email: str, otp: str, db: Session):
     user.last_login_at = datetime.utcnow()
     db.commit()
 
-    dept = (
-        db.query(Department)
-        .filter(
-            Department.head_user_id == user.id,
-            Department.company_id == user.company_id,
-            Department.is_active.is_(True),
-            Department.is_delete.is_(False),
+    department = None
+    if user.department_id:
+        department = (
+            db.query(Department)
+            .filter(
+                Department.id == user.department_id,
+                Department.company_id == user.company_id,
+                Department.is_active.is_(True),
+                Department.is_delete.is_(False),
+            )
+            .first()
         )
-        .first()
+
+    is_department_head = (
+        department is not None and department.head_user_id == user.id
     )
+
+    expire = datetime.utcnow() + timedelta(days=7)
 
     payload = {
         "user_id": user.id,
         "company_id": user.company_id,
         "role": user.role.value,
-        "name":user.name,
-        "email":user.email,
-        "exp":expire,
-        "is_department_head": bool(dept),
-        "department_id": dept.id if dept else None,
-    }
-    user={
-        "name":user.name,
-        "email":user.email
+        "name": user.name,
+        "email": user.email,
+        "exp": expire,
+        "is_department_head": is_department_head,
+        "department_id": department.id if department else None,
     }
 
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
     ui_role = resolve_ui_role(payload)
-    # sidebar = SIDEBAR_MENU.get(ui_role, [])
     sidebar = get_sidebar_for_user(db, ui_role)
+
+    user_data = {
+        "name": user.name,
+        "email": user.email,
+    }
+
     return {
         "token": token,
         "sidebar": sidebar,
-        "is_department_head": payload["is_department_head"],
-        "department_id": payload["department_id"],
-        "user":user
+        "is_department_head": is_department_head,
+        "department_id": department.id if department else None,
+        "user": user_data,
     }
 
 
@@ -191,46 +208,45 @@ def create_company_service(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-
 def list_companies_service(
-    db: Session, current_user: dict, page: int = 1, size: int = 10
+    db: Session,
+    current_user: dict,
+    page: int = 1,
+    size: int = 10,
+    search: str | None = None,
 ):
     offset = (page - 1) * size
-    total = (
-        db.query(Company)
-        .filter(
-            Company.created_by == current_user["user_id"], Company.is_delete.is_(False)
-        )
-        .count()
+
+    base_query = db.query(Company).filter(
+        Company.created_by == current_user["user_id"],
+        Company.is_delete.is_(False),
     )
 
-    companies = (
-        db.query(Company)
-        .filter(
-            Company.created_by == current_user["user_id"], Company.is_delete.is_(False)
+    if search:
+        search_term = f"%{search}%"
+        base_query = base_query.filter(
+            or_(
+                Company.name.ilike(search_term),
+                Company.contact_email.ilike(search_term),
+            )
         )
+
+    total = base_query.count()
+
+    companies = (
+        base_query
         .order_by(Company.created_at.desc())
         .offset(offset)
         .limit(size)
         .all()
     )
-    
-    data=[]
-    for company in companies:
-        data.append(
-            {
-                "id":company.id,
-                "name":company.name,
-                "contact_person":company.contact_person,
-                "contact_email":company.contact_email,
-                "total_space":bytes_to_gb(company.total_space),
-                "remaining_space":bytes_to_mb(company.remaining_space),
-                "is_active":company.is_active,
-                "created_at":company.created_at
-            }
-        )
 
-    return {"page": page, "size": size, "total": total, "data": data}
+    return {
+        "page": page,
+        "size": size,
+        "total": total,
+        "data": companies,
+    }
 
 
 def updateStatusCompany(companyId: int, is_active: bool, db: Session, user: dict):

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional
+from typing import Optional,List
 from datetime import datetime
 from uuid import UUID
 
@@ -208,3 +208,12 @@ class SummeryResponse(BaseModel):
     summary: str
 
     model_config = ConfigDict(from_attributes=True)
+class DocumentSaveSchema(BaseModel):
+    summary: Optional[str] = None
+    tags: Optional[List[str]] = None
+   
+class GetCompaniesRequest(BaseModel):
+    
+    page: int = 1
+    pagelimit: int = 10
+    search: Optional[str] = None

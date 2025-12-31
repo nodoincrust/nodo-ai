@@ -4,6 +4,10 @@ import os
 from typing import Optional
 import tempfile
 import traceback
+import tempfile
+import os
+import shutil
+import uuid
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
@@ -17,7 +21,6 @@ from app.AIhelpers.ai_helper import (
 )
 from app.services.ai_DBservice import create_chat_session
 from app.services.document_service import process_document
-
 router = APIRouter(prefix="/ai")
 
 
@@ -25,10 +28,7 @@ router = APIRouter(prefix="/ai")
 async def upload_document(
     file: UploadFile = File(...), session_id: Optional[str] = Form(None)
 ):
-    import tempfile
-    import os
-    import shutil
-    import uuid
+    print("reached in ai controller")
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -109,6 +109,7 @@ async def chat_api(request: ChatRequest):
 
 
 @router.get("/summary/{document_id}")
-async def summarize_document(document_id: str):
+
+def summarize_document(document_id: str):
     # Generate and return a document summary.
     return handle_summary(document_id)

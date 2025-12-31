@@ -13,6 +13,7 @@ from sqlalchemy import (
     CheckConstraint,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from app.db import Base
@@ -365,8 +366,8 @@ class DocumentVersion(Base):
     file_name = Column(String(255), nullable=False)
     file_size_bytes = Column(BigInteger, nullable=False)
 
-    summary = Column(Text)
-    tags = Column(Text)  # JSON/text for now
+    summary = Column(Text, nullable=True)
+    tags = Column(JSONB, nullable=True)  # JSON/text for now
 
     ai_document_id = Column(PG_UUID(as_uuid=True), nullable=True)
 
@@ -378,7 +379,7 @@ class DocumentReview(Base):
 
     id = Column(BigInteger, primary_key=True)
     document_id = Column(BigInteger, ForeignKey("documents.id"), nullable=False)
-    reviewed_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    reviewed_by = Column(BigInteger, ForeignKey("users.id"), nullable=True)
 
     status = Column(
         Enum("PENDING", "APPROVED", "REJECTED", name="review_status_enum"),

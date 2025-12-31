@@ -63,37 +63,40 @@ def get_current_user(
     user_id = payload.get("user_id")
     company_id = payload.get("company_id")
     role = payload.get("role")
+    department_id = payload.get("department_id")
 
     if not user_id or not role:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
+    # 1️⃣ Validate department from DB (if present)
+    department = None
+    if department_id:
+        department = (
+            db.query(Department)
+            .filter(
+                Department.id == department_id,
+                Department.company_id == company_id,
+                Department.is_active.is_(True),
+                Department.is_delete.is_(False),
+            )
+            .first()
+        )
+
+    # 2️⃣ Check if user is department head
+    is_department_head = (
+        department is not None and department.head_user_id == user_id
+    )
+
+    # 3️⃣ Build current_user object
     current_user = {
         "user_id": user_id,
         "company_id": company_id,
         "role": role,
+        "department_id": department.id if department else None,
+        "is_department_head": is_department_head,
     }
 
-    dept = (
-        db.query(Department)
-        .filter(
-            Department.head_user_id == user_id,
-            Department.company_id == company_id,
-            Department.is_active.is_(True),
-            Department.is_delete.is_(False),
-        )
-        .first()
-    )
-
-    if dept:
-        current_user["is_department_head"] = True
-        current_user["department_id"] = dept.id
-    else:
-        current_user["is_department_head"] = False
-        current_user["department_id"] = None
-
     return current_user
-
-
 def employee_manage_guard(current_user: dict):
     if current_user["role"] != UserRole.COMPANY_ADMIN.value and not current_user.get(
         "is_department_head"

@@ -7,28 +7,14 @@ from sqlalchemy import func
 
 from app.db import SessionLocal, engine, Base
 from app.models import (
-    Document,
+    AIDocument,
     DocuementChunks,
     DocuemntSummery,
     ChatSession,
     SessionMessages,
     SessionMemorySummery,
+    DocuemntSummery
 )
-
-
-def init_db():
-    # Ensure pgvector extension exists
-    with engine.connect() as conn:
-        try:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-            conn.commit()
-        except Exception:
-            # Extension may not be available (managed DBs)
-            pass
-
-    # Create all tables
-    Base.metadata.create_all(bind=engine)
-
 
 def create_document(
     self,
@@ -37,8 +23,8 @@ def create_document(
     file_type: str,
     file_size_mb: float,
     session_id: Optional[str] = None,
-) -> Document:
-    doc = Document(
+) -> AIDocument:
+    doc = AIDocument (
         document_id=document_id,
         session_id=session_id,
         filename=filename,
@@ -114,7 +100,7 @@ def upsert_document_summary(self, document_id: str, summary_text: str):
 
 
 def get_document_summary(self, document_id: str) -> Optional[str]:
-    res = self.db.query(DocuementSummery).filter_by(document_id=document_id).first()
+    res = self.db.query(DocuemntSummery).filter_by(document_id=document_id).first()
     return res.summery_text if res else None
 
 

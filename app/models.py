@@ -145,23 +145,40 @@ class Department(Base):
 # from db import Base
 EMBEDDING_DIMENSION = 768
 
+class AIDocument(Base):
+    __tablename__ = "ai_documents"
 
-class Document(Base):
-    __tablename__ = "documents"
-
-    document_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(
-        PG_UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=True
+    document_id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
     )
+
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id"),
+        nullable=True,
+    )
+
     filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)
-    file_size_mb = Column(Numeric, CheckConstraint("file_size_mb >= 0"), nullable=True)
+    file_size_mb = Column(
+        Numeric,
+        CheckConstraint("file_size_mb >= 0"),
+        nullable=True,
+    )
+
     created_time = Column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=True
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
     )
+
     chunks = relationship(
-        "DocuementChunks", back_populates="document", cascade="all, delete-orphan"
+        "DocuementChunks",
+        back_populates="document",
+        cascade="all, delete-orphan",
     )
+
     summary = relationship(
         "DocuemntSummery",
         back_populates="document",
@@ -169,32 +186,63 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    company_id = Column(BigInteger, ForeignKey("companies.id"), nullable=False)
+    department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=False)
+    uploaded_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+
+    status = Column(
+        Enum(
+            "DRAFT",
+            "SUBMITTED",
+            "UNDER_REVIEW",
+            "APPROVED",
+            "REJECTED",
+            name="document_status_enum",
+        ),
+        nullable=False,
+        default="DRAFT",
+        index=True,
+    )
+
+    current_version = Column(Integer, default=1)
+
+    is_active = Column(Boolean, default=True)
+    is_delete = Column(Boolean, default=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 
 class DocuementChunks(Base):
     __tablename__ = "Docuement_Chunks"
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
         nullable=False,
     )
     session_id = Column(
-        PG_UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=False
+        PG_UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=True
     )
     chunk_index = Column(Integer, nullable=False)
     chunk_text = Column(Text, nullable=False)
     embedding = Column(Vector(EMBEDDING_DIMENSION), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    document = relationship("Document", back_populates="chunks")
-
+    document = relationship("AIDocument", back_populates="chunks") 
+ 
 
 class DocuemntSummery(Base):
     __tablename__ = "Document_Summaries"
 
     document_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
         primary_key=True,
     )
     summery_text = Column(Text, nullable=False)
@@ -208,7 +256,8 @@ class DocuemntSummery(Base):
         nullable=False,
     )
 
-    document = relationship("Document", back_populates="summary")
+    document = relationship("AIDocument", back_populates="summary")
+
 
 
 class ChatSession(Base):
@@ -303,3 +352,38 @@ class RoleSidebarMapping(Base):
     )
 
     menu = relationship("SidebarMenu")
+
+class DocumentVersion(Base):
+    __tablename__ = "document_versions"
+
+    id = Column(BigInteger, primary_key=True)
+    document_id = Column(BigInteger, ForeignKey("documents.id"), nullable=False)
+
+    version_number = Column(Integer, nullable=False)
+
+    file_path = Column(Text, nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_size_bytes = Column(BigInteger, nullable=False)
+
+    summary = Column(Text)
+    tags = Column(Text)  # JSON/text for now
+
+    ai_document_id = Column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class DocumentReview(Base):
+    __tablename__ = "document_reviews"
+
+    id = Column(BigInteger, primary_key=True)
+    document_id = Column(BigInteger, ForeignKey("documents.id"), nullable=False)
+    reviewed_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+
+    status = Column(
+        Enum("PENDING", "APPROVED", "REJECTED", name="review_status_enum"),
+        nullable=False,
+    )
+
+    comments = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)

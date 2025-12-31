@@ -25,6 +25,8 @@ ALGORITHM = "HS256"
 
 security = HTTPBearer()
 
+GB= 1024 ** 3
+MB = 1024 ** 2
 
 def otp_generate():
     return str(random.randint(1000, 9999))
@@ -132,3 +134,13 @@ def resolve_ui_role(current_user: dict):
         return UserRole.DEPARTMENT_HEAD
 
     return UserRole.EMPLOYEE
+
+def gb_to_bytes(gb:int|float)->int:
+    return int(gb*GB)
+
+def bytes_to_gb(byte_size:int)->float:
+    return round(byte_size/GB,2)
+
+def bytes_to_mb(byte_size:int)->float:
+    return round(byte_size/MB,2)
+    

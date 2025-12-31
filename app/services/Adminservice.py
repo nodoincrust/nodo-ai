@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime,timedelta
 from fastapi import HTTPException, BackgroundTasks
 from jose import jwt
 import os
@@ -14,11 +14,12 @@ from app.models import (
 )
 from app.enum import UserRole, SIDEBAR_MENU
 from app.schemas import CreateCompanySchema, UpdateCompanySchema
-from app.helpers import otp_generate, otp_expiry, send_otp_email, resolve_ui_role
+from app.helpers import otp_generate, otp_expiry, send_otp_email, resolve_ui_role,gb_to_bytes,bytes_to_gb,bytes_to_mb
 
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 print("JWT_SECRET =", os.getenv("JWT_SECRET"))
+expire = datetime.utcnow() + timedelta(weeks=1)
 if not SECRET_KEY:
     raise RuntimeError("JWT_SECRET is not set")
 
@@ -107,8 +108,15 @@ def verify_otp_service(email: str, otp: str, db: Session):
         "user_id": user.id,
         "company_id": user.company_id,
         "role": user.role.value,
+        "name":user.name,
+        "email":user.email,
+        "exp":expire,
         "is_department_head": bool(dept),
         "department_id": dept.id if dept else None,
+    }
+    user={
+        "name":user.name,
+        "email":user.email
     }
 
     token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
@@ -121,6 +129,7 @@ def verify_otp_service(email: str, otp: str, db: Session):
         "sidebar": sidebar,
         "is_department_head": payload["is_department_head"],
         "department_id": payload["department_id"],
+        "user":user
     }
 
 
@@ -148,13 +157,13 @@ def create_company_service(
             raise HTTPException(
                 status_code=400, detail="User with this email already exists"
             )
-
+        total_space_bytes=gb_to_bytes(payload.total_space)
         company = Company(
             name=payload.name,
             contact_person=payload.contact_person,
             contact_email=payload.contact_email,
-            total_space=payload.total_space,
-            remaining_space=payload.total_space,
+            total_space=total_space_bytes,
+            remaining_space=total_space_bytes,
             created_by=current_user["user_id"],
         )
 
@@ -205,8 +214,23 @@ def list_companies_service(
         .limit(size)
         .all()
     )
+    
+    data=[]
+    for company in companies:
+        data.append(
+            {
+                "id":company.id,
+                "name":company.name,
+                "contact_person":company.contact_person,
+                "contact_email":company.contact_email,
+                "total_space":bytes_to_gb(company.total_space),
+                "remaining_space":bytes_to_mb(company.remaining_space),
+                "is_active":company.is_active,
+                "created_at":company.created_at
+            }
+        )
 
-    return {"page": page, "size": size, "total": total, "data": companies}
+    return {"page": page, "size": size, "total": total, "data": data}
 
 
 def updateStatusCompany(companyId: int, is_active: bool, db: Session, user: dict):

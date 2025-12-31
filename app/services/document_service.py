@@ -77,7 +77,7 @@ def process_document(
         idx = 0
 
         for chunk in chunk_generator:
-            texts_batch.append(chunk)
+            texts_batch.append(chunk["text"])
 
             # when batch ready, create embeddings and flush to DB
             if len(texts_batch) >= batch_size:

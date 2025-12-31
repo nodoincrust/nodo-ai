@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.db import SessionLocal, engine, Base
-from app.models import (Document,DocuementChunks,DocuemntSummery,ChatSession,SessionMessages,SessionMemorySummery,)
+from app.models.ai_Model import (Document, DocuementChunks, DocuemntSummery, ChatSession, SessionMessages, SessionMemorySummery)
 
 def init_db():
     # Ensure pgvector extension exists

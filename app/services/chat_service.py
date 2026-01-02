@@ -1,36 +1,56 @@
-from typing import Generator, Optional, List
+from typing import Optional, Generator, List
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import SessionMessages, SessionMemorySummery, DocuementChunks
 from app.AIhelpers.embedding_helper import create_embedding
 from app.AIhelpers.llm_helper import ask_llm, ask_llm_stream
-# from services.background_tasks import maybe_update_memory
+
+# ==============================
+# CONFIG
+# ==============================
 
 TOP_K = 5
 MAX_HISTORY = 6
 
 
 def _load_context(db: Session, session_id: str) -> str:
-    memory = db.query(SessionMemorySummery)\
-               .filter_by(session_id=session_id)\
-               .first()
 
-    messages = db.query(SessionMessages)\
-                 .filter_by(session_id=session_id)\
-                 .order_by(SessionMessages.created_at.desc())\
-                 .limit(MAX_HISTORY)\
-                 .all()
+    memory = (
+        db.query(SessionMemorySummery)
+        .filter_by(session_id=session_id)
+        .first()
+    )
+
+    messages = (
+        db.query(SessionMessages)
+        .filter_by(session_id=session_id)
+        .order_by(SessionMessages.created_at.desc())
+        .limit(MAX_HISTORY)
+        .all()
+    )
 
     history = "\n".join(
         f"{m.role.upper()}: {m.content}"
         for m in reversed(messages)
     )
 
-    return f"MEMORY:\n{memory.summary}\n\n{history}" if memory else history
+    if memory and memory.summary:
+        return f"MEMORY:\n{memory.summary}\n\n{history}"
+
+    return history
 
 
-def _retrieve_chunks(db: Session, query: str, document_id: Optional[str]):
+def _retrieve_document_context(
+    db: Session,
+    *,
+    query: str,
+    document_id: Optional[str],
+) -> tuple[str, list]:
+    """
+    Semantic retrieval ONLY.
+    No LLM calls.
+    """
     if not document_id:
         return "", []
 
@@ -55,49 +75,74 @@ def _retrieve_chunks(db: Session, query: str, document_id: Optional[str]):
 
     for _, c in scored[:TOP_K]:
         context.append(c.chunk_text)
-        citations.append({
-            "document_id": str(c.document_id),
-            "chunk_index": c.chunk_index,
-            "page_number": c.page_number
-        })
+        citations.append(
+            {
+                "document_id": str(c.document_id),
+                "chunk_index": c.chunk_index,
+                "page_number": c.page_number,
+            }
+        )
+
     return "\n".join(context), citations
 
 
-def chat(
+# ==============================
+# PUBLIC CHAT API
+# ==============================
+
+def chat_with_session(
     session_id: str,
     query: str,
-    document_id: Optional[str] = None
+    document_id: Optional[str] = None,
 ) -> dict:
+    """
+    🔥 EXACTLY ONE LLM CALL HAPPENS HERE 🔥
+    """
     db = SessionLocal()
     try:
-        db.add(SessionMessages(
-            session_id=session_id,
-            role="user",
-            content=query
-        ))
+        # 1️⃣ Save user message
+        db.add(
+            SessionMessages(
+                session_id=session_id,
+                role="user",
+                content=query,
+            )
+        )
         db.commit()
 
-        base_context = _load_context(db, session_id)
-        doc_context, citations = _retrieve_chunks(db, query, document_id)
+        # 2️⃣ Build context (NO LLM)
+        memory_context = _load_context(db, session_id)
+        doc_context, citations = _retrieve_document_context(
+            db,
+            query=query,
+            document_id=document_id,
+        )
 
-        full_context = f"{base_context}\n\nDOCUMENT:\n{doc_context}"
+        full_context = memory_context
+        if doc_context:
+            full_context += "\n\nDOCUMENT:\n" + doc_context
 
-        result = ask_llm(context=full_context, question=query)
+        # 3️⃣ 🔥 SINGLE LLM CALL 🔥
+        llm_result = ask_llm(
+            context=full_context,
+            question=query,
+        )
 
-        answer = result["data"]["answer"]
+        answer = llm_result["data"]["answer"]
 
-        db.add(SessionMessages(
-            session_id=session_id,
-            role="assistant",
-            content=answer
-        ))
+        # 4️⃣ Save assistant response
+        db.add(
+            SessionMessages(
+                session_id=session_id,
+                role="assistant",
+                content=answer,
+            )
+        )
         db.commit()
-
-        # maybe_update_memory(session_id)
 
         return {
             "answer": answer,
-            "citations": citations
+            "citations": citations,
         }
 
     finally:
@@ -106,32 +151,38 @@ def chat(
 
 def chat_stream(
     session_id: str,
-    query: str
+    query: str,
 ) -> Generator[str, None, None]:
+    """
+    Streaming version.
+    Still ONE logical LLM call.
+    """
     db = SessionLocal()
     try:
-        db.add(SessionMessages(
-            session_id=session_id,
-            role="user",
-            content=query
-        ))
+        db.add(
+            SessionMessages(
+                session_id=session_id,
+                role="user",
+                content=query,
+            )
+        )
         db.commit()
 
         context = _load_context(db, session_id)
-        final = []
+        final_tokens: List[str] = []
 
         for token in ask_llm_stream(context=context, question=query):
-            final.append(token)
+            final_tokens.append(token)
             yield token
 
-        db.add(SessionMessages(
-            session_id=session_id,
-            role="assistant",
-            content="".join(final)
-        ))
+        db.add(
+            SessionMessages(
+                session_id=session_id,
+                role="assistant",
+                content="".join(final_tokens),
+            )
+        )
         db.commit()
-
-        # maybe_update_memory(session_id)
 
     finally:
         db.close()

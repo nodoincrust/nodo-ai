@@ -1,197 +1,266 @@
 import uuid
 import logging
-from typing import Optional
+import shutil
+import os
+from typing import List, Dict
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
+
 from app.db import SessionLocal
-from app.models import Document, DocuementChunks,ChatSession
+from app.models import (
+    AIDocument,
+    DocuementChunks,
+    DocumentVersion,
+    DocumentReview,
+    Document,
+    Company,
+)
+from app.AIhelpers.chunk_helper import chunk_text
 from app.AIhelpers.format_helper import iter_file_pages
-from app.AIhelpers.chunk_helper import chunk_text_from_pages
-from app.AIhelpers.embedding_helper import create_embeddings, REDIS
+from app.schemas import DocumentSaveSchema
 
-logger = logging.getLogger("ai_modul.document_service")
+BASE_STORAGE_PATH = "storage"
+logger = logging.getLogger(__name__)
 
-def validate_document(document_id: str):
-    db = SessionLocal()
-    try:
-        exists = (
-            db.query(Document)
-            .filter(Document.document_id == document_id)
-            .first()
-        )
-        if not exists:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Document {document_id} not found"
-            )
-    finally:
-        db.close()
+# ==============================
+# INGESTION CONFIG
+# ==============================
+
+MAX_UPLOAD_MB = 50
+CHUNK_BATCH_SIZE = 32
+
+
+# ==============================
+# HELPERS
+# ==============================
+
+def normalize_content(text: str) -> str:
+    """
+    Detect tabular vs textual content and normalize
+    """
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return ""
+
+    numeric_ratio = sum(any(c.isdigit() for c in l) for l in lines) / len(lines)
+    short_ratio = sum(len(l.split()) <= 5 for l in lines) / len(lines)
+
+    if numeric_ratio > 0.35 or short_ratio > 0.6:
+        return "\n".join(f"[ROW] {l}" for l in lines)
+    else:
+        return "\n".join(f"[TEXT] {l}" for l in lines)
+
+
+# ==============================
+# MAIN INGESTION PIPELINE
+# ==============================
 
 def process_document(
+    *,
     file_path: str,
     document_id: str,
     filename: str,
-    session_id: Optional[str],
+    session_id: str | None,
     file_type: str,
     file_size_mb: float,
-) -> dict:
+) -> Dict:
+    """
+    Core ingestion pipeline:
+    - Create AIDocument (FK parent)
+    - Extract text (all formats)
+    - Normalize
+    - Chunk
+    - Store chunks
+    """
 
     db: Session = SessionLocal()
-    if session_id is None:
-        session = ChatSession()
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-        session_id = session.session_id
+    chunks_created = 0
+    ocr_used = False
+
     try:
-        #Store document metadata
-        doc = Document(
+        # --------------------------------------------------
+        # 1️⃣ CREATE AI DOCUMENT (FK PARENT)  🔥 REQUIRED
+        # --------------------------------------------------
+        ai_doc = AIDocument(
             document_id=document_id,
             session_id=session_id,
             filename=filename,
             file_type=file_type,
             file_size_mb=file_size_mb,
         )
-        db.add(doc)
+        db.add(ai_doc)
+        db.commit()  # 🔴 MUST COMMIT BEFORE CHUNKS
+
+        logger.info(f"AIDocument created: {document_id}")
+
+        # --------------------------------------------------
+        # 2️⃣ EXTRACT + CHUNK
+        # --------------------------------------------------
+        for page_no, raw_text, used_ocr in iter_file_pages(file_path):
+            if not raw_text or not raw_text.strip():
+                continue
+
+            ocr_used = ocr_used or used_ocr
+            normalized = normalize_content(raw_text)
+
+            for chunk in chunk_text(normalized):
+                db.add(
+                    DocuementChunks(
+                        id=uuid.uuid4(),
+                        document_id=document_id,
+                        session_id=session_id,
+                        chunk_index=chunks_created,
+                        page_number=page_no,
+                        chunk_text=chunk,
+                    )
+                )
+                chunks_created += 1
+
         db.commit()
 
         logger.info(
-            "Starting ingestion for %s file=%s size=%.2fMB",
-            document_id, filename, file_size_mb
+            f"Document {document_id}: {chunks_created} chunks stored | OCR={ocr_used}"
         )
-
-        ocr_used = False
-
-        def page_texts():
-            nonlocal ocr_used
-            for page_no, (text, used_ocr) in enumerate(
-                iter_file_pages(file_path, file_type=file_type),
-                start=1
-            ):
-                if used_ocr:
-                    ocr_used = True
-                yield page_no, text
-
-        chunk_generator = chunk_text_from_pages(
-            page_texts(),
-            with_page=True
-        )
-
-        batch_size = 48
-
-        texts_batch: list[str] = []
-        page_numbers: list[Optional[int]] = []
-        objects_batch = []
-
-        idx = 0
-
-        for raw_chunk in chunk_generator:
-
-            # 🔒 Normalize ONCE
-            if isinstance(raw_chunk, dict):
-                text = raw_chunk.get("text")
-                page = raw_chunk.get("page")
-            else:
-                text = raw_chunk
-                page = None
-
-            if not isinstance(text, str) or not text.strip():
-                continue
-
-            texts_batch.append(text)
-            page_numbers.append(page)
-
-            # Flush batch
-            if len(texts_batch) >= batch_size:
-                _flush_batch(
-                    db=db,
-                    document_id=document_id,
-                    session_id=session_id,
-                    texts=texts_batch,
-                    pages=page_numbers,
-                    start_index=idx,
-                    objects_batch=objects_batch,
-                )
-                idx += len(texts_batch)
-
-                texts_batch.clear()
-                page_numbers.clear()
-                objects_batch.clear()
-
-        if texts_batch:
-            _flush_batch(
-                db=db,
-                document_id=document_id,
-                session_id=session_id,
-                texts=texts_batch,
-                pages=page_numbers,
-                start_index=idx,
-                objects_batch=objects_batch,
-            )
-            idx += len(texts_batch)
-        try:
-            REDIS.setex(
-                f"progress:{document_id}:status",
-                86400,
-                f"ingestion complete for {document_id}"
-            )
-        except Exception:
-            pass
-
-        logger.info("Ingestion complete for %s (%s chunks)", document_id, idx)
 
         return {
-            "status": "success",
-            "document_id": document_id,
-            "chunks": idx,
+            "chunks": chunks_created,
             "ocr_used": ocr_used,
         }
+
+    except Exception as e:
+        db.rollback()
+        logger.exception("Document ingestion failed")
+        raise
 
     finally:
         db.close()
 
-def _flush_batch(
-    *,
+
+# ==============================
+# DOCUMENT SAVE (BUSINESS FLOW)
+# ==============================
+
+def save_document(
     db: Session,
-    document_id: str,
-    session_id: Optional[str],
-    texts: list[str],
-    pages: list[Optional[int]],
-    start_index: int,
-    objects_batch: list,
+    document_id: int,
+    payload: DocumentSaveSchema,
+    current_user: dict,
 ):
-    assert len(texts) == len(pages)
-
-    try:
-        embeddings = create_embeddings(texts)
-    except Exception as e:
-        logger.exception(
-            "Embedding service failed for %s: %s",
-            document_id, e
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.is_delete.is_(False),
         )
-        embeddings = [None] * len(texts)
+        .first()
+    )
 
-    for i, emb in enumerate(embeddings):
-        objects_batch.append(
-            DocuementChunks(
-                id=uuid.uuid4(),
-                document_id=document_id,
-                session_id=session_id,
-                chunk_index=start_index + i,
-                chunk_text=texts[i],
-                embedding=emb,
-                page_number=pages[i],
-            )
-        )
+    if not document:
+        raise HTTPException(404, "Document not found")
 
-    db.bulk_save_objects(objects_batch)
+    if document.uploaded_by != current_user["user_id"]:
+        raise HTTPException(403, "Permission denied")
+
+    if document.status != "DRAFT":
+        raise HTTPException(400, "Only draft documents can be saved")
+
+    version = (
+        db.query(DocumentVersion)
+        .filter(DocumentVersion.document_id == document.id)
+        .order_by(DocumentVersion.version_number.desc())
+        .first()
+    )
+
+    if not version:
+        raise HTTPException(500, "Document version not found")
+
+    if payload.summary is not None:
+        version.summary = payload.summary
+
+    if payload.tags is not None:
+        version.tags = payload.tags
+
+    document.status = "SUBMITTED"
+
+    review = DocumentReview(
+        document_id=document.id,
+        reviewed_by=None,
+        status="PENDING",
+    )
+
+    db.add(review)
     db.commit()
 
-    try:
-        REDIS.setex(
-            f"progress:{document_id}:embedding_batch",
-            86400,
-            f"embedding_batch_done:{start_index + len(texts)}"
+    return {
+        "document_id": document.id,
+        "status": document.status,
+    }
+
+
+# ==============================
+# DRAFT CREATION
+# ==============================
+
+def create_document_draft(
+    db: Session,
+    *,
+    ai_document_id: str,
+    temp_file_path: str,
+    original_filename: str,
+    department_id: int,
+    current_user: dict,
+):
+    company = (
+        db.query(Company)
+        .filter(
+            Company.id == current_user["company_id"],
+            Company.is_delete.is_(False),
         )
-    except Exception:
-        pass
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    document = Document(
+        company_id=company.id,
+        department_id=department_id,
+        uploaded_by=current_user["user_id"],
+        status="DRAFT",
+    )
+    db.add(document)
+    db.flush()
+
+    doc_dir = os.path.join(
+        BASE_STORAGE_PATH,
+        "companies",
+        str(company.id),
+        "documents",
+        str(document.id),
+    )
+    os.makedirs(doc_dir, exist_ok=True)
+
+    permanent_path = os.path.join(
+        doc_dir,
+        f"v1_{original_filename}",
+    )
+
+    shutil.move(temp_file_path, permanent_path)
+
+    file_size_bytes = os.path.getsize(permanent_path)
+
+    version = DocumentVersion(
+        document_id=document.id,
+        version_number=1,
+        file_path=permanent_path,
+        file_name=original_filename,
+        file_size_bytes=file_size_bytes,
+        ai_document_id=ai_document_id,
+        created_by=current_user["user_id"],
+    )
+
+    db.add(version)
+    company.remaining_space -= file_size_bytes
+    db.commit()
+
+    return document.id

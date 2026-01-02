@@ -14,7 +14,7 @@ from app.schemas import (
     VerifyOTPSchema,
     CreateCompanySchema,
     UpdateCompanyStatusSchema,
-    UpdateCompanySchema,
+    UpdateCompanySchema,GetCompaniesRequest
 )
 from sqlalchemy.orm import Session
 from app.helpers import get_current_user
@@ -58,11 +58,9 @@ def addCompany(
 
     return create_company_service(payload=payload, db=db, current_user=current_user)
 
-
-@router.get("/getCompanies")
+@router.post("/getCompanies")
 def companiesList(
-    page: int = 1,
-    size: int = 10,
+   payload: GetCompaniesRequest,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -72,9 +70,11 @@ def companiesList(
     return list_companies_service(
         db=db,
         current_user=current_user,
-        page=page,
-        size=size,
+        page=payload.page,
+        size=payload.pagelimit,
+        search=payload.search,
     )
+
 
 
 @router.put("/companies/{companyId}/status")

@@ -1,10 +1,12 @@
-from pydantic import BaseModel, EmailStr, Field , ConfigDict
-from typing import Optional
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from typing import Optional,List
 from datetime import datetime
 from uuid import UUID
 
+
 class RequestOTPSchema(BaseModel):
     email: EmailStr
+
 
 class VerifyOTPSchema(BaseModel):
     email: EmailStr
@@ -24,6 +26,8 @@ class CreateCompanySchema(BaseModel):
     name: str = Field(..., max_length=255)
     contact_person: str = Field(..., max_length=255)
     contact_email: EmailStr
+    total_space: int = Field(..., gt=0, description="Total storage space in gb")
+
 
 class CompanyResponseSchema(BaseModel):
     id: int
@@ -32,19 +36,29 @@ class CompanyResponseSchema(BaseModel):
     contact_email: EmailStr
     is_active: bool
     created_at: datetime
-    is_delete:bool
+    is_delete: bool
+
 
 class CreateUserSchema(BaseModel):
     name: str = Field(..., max_length=255)
     email: EmailStr
+
+    total_space: int
+    remaining_space: int
+
     role_id: int
     department_id: Optional[int] = None
     reports_to: Optional[int] = None
 
+    class Config:
+        from_attributes = True
+
+
 class UpdateCompanySchema(BaseModel):
     name: str
     contact_person: str
-    contact_email:EmailStr
+    contact_email: EmailStr
+
 
 class UserResponseSchema(BaseModel):
     id: int
@@ -61,7 +75,8 @@ class CreateDepartmentSchema(BaseModel):
     name: str = Field(..., max_length=255)
     contact_person: str = Field(..., max_length=255)
     contact_email: EmailStr
-    contact:str=Field(...,max_length=10)
+    contact: str = Field(..., max_length=10)
+
 
 class DepartmentResponseSchema(BaseModel):
     id: int
@@ -103,37 +118,46 @@ class AddCommentSchema(BaseModel):
 
 
 class ApprovalActionSchema(BaseModel):
-    is_active: bool  
+    is_active: bool
     remarks: Optional[str] = None
 
+
 class UpdateCompanyStatusSchema(BaseModel):
-    is_active:bool
-    
+    is_active: bool
+
+
 class CreateDepartmentSchema(BaseModel):
     name: str
     description: str | None = None
     head_user_id: int | None = None
+
 
 class UpdateDeptSchema(BaseModel):
     name: str | None = None
     description: str | None = None
     head_user_id: int | None = None
 
+
 class UpdateDeptStatusSchema(BaseModel):
     is_active: bool
-    
+
+
 class CreateEmployeeSchema(BaseModel):
     name: str = Field(..., max_length=255)
     email: EmailStr
     department_id: Optional[int] = None
+    designation: str = Field(..., max_length=255)
     reports_to: Optional[int] = None
+
 
 class UpdateEmployeeSchema(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     department_id: Optional[int] = None
     reports_to: Optional[int] = None
-    
+    designation: Optional[str]
+
+
 class UpdateEmployeeStatusSchema(BaseModel):
     is_active: bool
 
@@ -142,37 +166,54 @@ class UpdateEmployeeStatusSchema(BaseModel):
 class CreateSessionResponse(BaseModel):
     session_id: str
 
+
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     query: str
 
+
 class CitationRequest(BaseModel):
     query: str
     document_id: Optional[str] = None
-    
+
+
 class ChatResponse(BaseModel):
-    session_id:str
+    session_id: str
     response: str
+
 
 class AskRequest(BaseModel):
     question: str
+
 
 class AskTextPayload(BaseModel):
     text: str
     question: str
     mode: str = "docuemnts"  # or "web"
 
+
 class UploadResponse(BaseModel):
     document_id: str
-    chunks : int
+    chunks: int
     message: str
+
 
 class AnswerResponse(BaseModel):
     question: str
     answer: str
+
 
 class SummeryResponse(BaseModel):
     document_id: str
     summary: str
 
     model_config = ConfigDict(from_attributes=True)
+class DocumentSaveSchema(BaseModel):
+    summary: Optional[str] = None
+    tags: Optional[List[str]] = None
+   
+class GetCompaniesRequest(BaseModel):
+    
+    page: int = 1
+    pagelimit: int = 10
+    search: Optional[str] = None

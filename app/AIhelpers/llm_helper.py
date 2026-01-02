@@ -44,18 +44,15 @@ def ask_llm(context: str, question: str) -> dict:
             {"role": "system", "content": f"Context:\n{context}"},
             {"role": "user", "content": question},
         ],
+        "max_tokens": 400,
+        "temperature": 0.2,
         "stream": False,
     }
 
-    res = requests.post(OLLAMA_URL, json=payload) # timeout=120
+    res = requests.post(OLLAMA_URL, json=payload)  # timeout=120
     res.raise_for_status()
 
-    return {
-        "status": "success",
-        "data": {
-            "answer": res.json()["message"]["content"]
-        }
-    }
+    return {"status": "success", "data": {"answer": res.json()["message"]["content"]}}
 
 
 def ask_llm_stream(context: str, question: str) -> Iterable[str]:

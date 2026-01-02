@@ -11,10 +11,12 @@ from sqlalchemy import (
     Integer,
     Numeric,
     CheckConstraint,
-    Text,
+    JSON,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
-from datetime import datetime,timezone
+from datetime import datetime, timezone
+from sqlalchemy.sql import func
 from app.db import Base
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from pgvector.sqlalchemy import Vector
@@ -29,19 +31,19 @@ class User(Base):
     company_id = Column(
         BigInteger,
         ForeignKey("companies.id"),
-        nullable=True,   # SYSTEM_ADMIN allowed
+        nullable=True,  # SYSTEM_ADMIN allowed
     )
 
     role = Column(Enum(UserRole, name="user_role_enum"), nullable=False, index=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
-    is_delete=Column(Boolean,default=False,nullable=False,index=True)
-
+    is_delete = Column(Boolean, default=False, nullable=False, index=True)
 
     department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=True)
     reports_to = Column(BigInteger, ForeignKey("users.id"), nullable=True)
 
     name = Column(String(255))
     email = Column(String(255), unique=True, nullable=False)
+    designation = Column(String(255))
 
     last_login_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -76,8 +78,11 @@ class Company(Base):
         index=True,
     )
 
+    total_space = Column(BigInteger, default=0, nullable=False)
+    remaining_space = Column(BigInteger, default=0, nullable=False)
+
     is_active = Column(Boolean, default=True, nullable=False, index=True)
-    is_delete = Column(Boolean,default=False,nullable=False, index=True)
+    is_delete = Column(Boolean, default=False, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     users = relationship(
@@ -120,21 +125,13 @@ class Department(Base):
     id = Column(BigInteger, primary_key=True, index=True)
 
     company_id = Column(
-        BigInteger,
-        ForeignKey("companies.id"),
-        nullable=False,
-        index=True
+        BigInteger, ForeignKey("companies.id"), nullable=False, index=True
     )
 
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
 
-    head_user_id = Column(
-        BigInteger,
-        ForeignKey("users.id"),
-        nullable=True,
-        index=True
-    )
+    head_user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
 
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_delete = Column(Boolean, default=False, nullable=False, index=True)
@@ -149,61 +146,156 @@ class Department(Base):
 # from db import Base
 EMBEDDING_DIMENSION = 768
 
+class AIDocument(Base):
+    __tablename__ = "ai_documents"
+
+    document_id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id"),
+        nullable=True,
+    )
+
+    filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)
+    file_size_mb = Column(
+        Numeric,
+        CheckConstraint("file_size_mb >= 0"),
+        nullable=True,
+    )
+
+    created_time = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    chunks = relationship(
+        "DocuementChunks",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
+
+    summary = relationship(
+        "DocuemntSummery",
+        back_populates="document",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
 class Document(Base):
     __tablename__ = "documents"
 
-    document_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(PG_UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=True)
-    filename = Column(String, nullable=False)
-    file_type = Column(String, nullable=False)
-    file_size_mb = Column(Numeric, CheckConstraint('file_size_mb >= 0'), nullable=True)
-    created_time = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=True)
-    chunks = relationship("DocuementChunks", back_populates="document", cascade="all, delete-orphan")
-    summary = relationship("DocuemntSummery", back_populates="document", uselist=False, cascade="all, delete-orphan")
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    company_id = Column(BigInteger, ForeignKey("companies.id"), nullable=False)
+    department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=False)
+    uploaded_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+
+    status = Column(
+        Enum(
+            "DRAFT",
+            "SUBMITTED",
+            "UNDER_REVIEW",
+            "APPROVED",
+            "REJECTED",
+            name="document_status_enum",
+        ),
+        nullable=False,
+        default="DRAFT",
+        index=True,
+    )
+
+    current_version = Column(Integer, default=1)
+
+    is_active = Column(Boolean, default=True)
+    is_delete = Column(Boolean, default=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 
 
 class DocuementChunks(Base):
     __tablename__ = "Docuement_Chunks"
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(PG_UUID(as_uuid=True), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False)
-    session_id = Column(PG_UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=False)
+    document_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    session_id = Column(
+        PG_UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=True
+    )
     chunk_index = Column(Integer, nullable=False)
     chunk_text = Column(Text, nullable=False)
     embedding = Column(Vector(EMBEDDING_DIMENSION), nullable=True)
     page_number = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    document = relationship("Document", back_populates="chunks")
-
+    document = relationship("AIDocument", back_populates="chunks") 
 
 class DocuemntSummery(Base):
     __tablename__ = "Document_Summaries"
 
-    document_id = Column(PG_UUID(as_uuid=True), ForeignKey("documents.document_id", ondelete="CASCADE"), primary_key=True)
-    summery_text = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    document_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
 
-    document = relationship("Document", back_populates="summary")
+    summery_text = Column(Text, nullable=False)
+    tags = Column(JSONB, nullable=True)
+    citations = Column(JSONB, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now())
+
+    document = relationship(
+        "AIDocument",
+        back_populates="summary",
+        uselist=False,
+    )
 
 
 class ChatSession(Base):
     __tablename__ = "sessions"
     session_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    last_active = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
-    messages = relationship("SessionMessages", back_populates="session", cascade="all, delete-orphan")
-    memorySummery = relationship("SessionMemorySummery", back_populates="session", uselist=False, cascade="all, delete-orphan")
+    messages = relationship(
+        "SessionMessages", back_populates="session", cascade="all, delete-orphan"
+    )
+    memorySummery = relationship(
+        "SessionMemorySummery",
+        back_populates="session",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class SessionMessages(Base):
     __tablename__ = "session_messages"
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(PG_UUID(as_uuid=True), ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     role = Column(String, nullable=False)  # 'user' or 'assistant'
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
 
     __table_args__ = (CheckConstraint("role IN ('user', 'assistant','system')"),)
     session = relationship("ChatSession", back_populates="messages")
@@ -211,8 +303,89 @@ class SessionMessages(Base):
 
 class SessionMemorySummery(Base):
     __tablename__ = "session_memory_summaries"
-    session_id = Column(PG_UUID(as_uuid=True), ForeignKey("sessions.session_id", ondelete="CASCADE"), primary_key=True)
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
     summary = Column(Text, nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
     session = relationship("ChatSession", back_populates="memorySummery")
+
+
+# class SidebarMenu(Base):
+#     __tablename__ = "sidebar_menus"
+
+#     id = Column(BigInteger, primary_key=True)
+#     menu_key = Column(String(50), unique=True, nullable=False)
+#     label = Column(String(100), nullable=False)
+#     path = Column(String(255), nullable=False)
+#     icon = Column(String(50), nullable=True)
+#     sort_order = Column(Integer, default=0)
+#     is_active = Column(Boolean, default=True)
+
+
+class SidebarMenu(Base):
+    __tablename__ = "sidebar_menus"
+
+    id = Column(BigInteger, primary_key=True)
+    menu_key = Column(String(50), unique=True, nullable=False)
+    label = Column(String(100), nullable=False)
+    path = Column(String(255), nullable=False)
+    icon = Column(Text)
+    icon_active=Column(Text)
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+
+
+class RoleSidebarMapping(Base):
+    __tablename__ = "role_sidebar_mappings"
+
+    id = Column(BigInteger, primary_key=True)
+    role = Column(Enum(UserRole, name="user_role_enum"), nullable=False)
+    sidebar_menu_id = Column(
+        BigInteger, ForeignKey("sidebar_menus.id", ondelete="CASCADE"), nullable=False
+    )
+
+    menu = relationship("SidebarMenu")
+
+class DocumentVersion(Base):
+    __tablename__ = "document_versions"
+
+    id = Column(BigInteger, primary_key=True)
+    document_id = Column(BigInteger, ForeignKey("documents.id"), nullable=False)
+
+    version_number = Column(Integer, nullable=False)
+
+    file_path = Column(Text, nullable=False)
+    file_name = Column(String(255), nullable=False)
+    file_size_bytes = Column(BigInteger, nullable=False)
+
+    summary = Column(Text, nullable=True)
+    tags = Column(JSONB, nullable=True)  # JSON/text for now
+
+    ai_document_id = Column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class DocumentReview(Base):
+    __tablename__ = "document_reviews"
+
+    id = Column(BigInteger, primary_key=True)
+    document_id = Column(BigInteger, ForeignKey("documents.id"), nullable=False)
+    reviewed_by = Column(BigInteger, ForeignKey("users.id"), nullable=True)
+
+    status = Column(
+        Enum("PENDING", "APPROVED", "REJECTED", name="review_status_enum"),
+        nullable=False,
+    )
+
+    comments = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)

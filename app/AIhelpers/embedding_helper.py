@@ -2,71 +2,84 @@ import redis
 import requests
 import hashlib
 import json
-from typing import List
-import numpy as np
+from typing import List, Dict
+
 
 REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 EMBED_URL = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
 
+EMBED_TIMEOUT = 30          # seconds
+CACHE_TTL = 86400           # 24 hours
+MAX_BATCH_SIZE = 16         # HARD LIMIT
 
-def create_embedding(text: str) -> List[float]:
-    """
-    Create or fetch cached embedding for text
-    """
-    key = "emb:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    cached = REDIS.get(key)
-    if cached:
-        return json.loads(cached)
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    payload = {
-        "model": EMBED_MODEL,
-        "prompt": text
-    }
 
-    res = requests.post(EMBED_URL, json=payload) # timeout=60
-    res.raise_for_status()
-
-    vector = res.json()["embedding"]
-    REDIS.setex(key, 86400, json.dumps(vector))  # 24h cache
-
-    return vector
+def _cache_key(text: str) -> str:
+    return f"emb:{_hash_text(text)}"
 
 
 def create_embeddings(texts: List[str]) -> List[List[float]]:
-    """
-    Create or fetch cached embeddings for a list of texts.
-    Returns embeddings in the same order as `texts`.
-    """
-    results = [None] * len(texts)
-    to_request = []  # tuples of (index, text)
+
+    if not texts:
+        return []
+
+    results: List[List[float] | None] = [None] * len(texts)
+    missing: List[Dict] = []
 
     pipe = REDIS.pipeline()
-    for i, t in enumerate(texts):
-        key = "emb:" + hashlib.sha256(t.encode("utf-8")).hexdigest()
-        pipe.get(key)
+    for t in texts:
+        pipe.get(_cache_key(t))
     cached = pipe.execute()
 
-    for i, v in enumerate(cached):
-        if v:
-            results[i] = json.loads(v)
+    for i, cached_val in enumerate(cached):
+        if cached_val:
+            results[i] = json.loads(cached_val)
         else:
-            to_request.append((i, texts[i]))
+            missing.append({"index": i, "text": texts[i]})
 
-    # Request uncached embeddings sequentially to avoid overloading embedding service.
-    # If the embedding API supports batching, this can be replaced with a single batch call.
-    for idx, txt in to_request:
+    if not missing:
+        return results  # type: ignore
+
+    for i in range(0, len(missing), MAX_BATCH_SIZE):
+        batch = missing[i:i + MAX_BATCH_SIZE]
+
         payload = {
             "model": EMBED_MODEL,
-            "prompt": txt
+            "prompt": [item["text"] for item in batch],
         }
-        res = requests.post(EMBED_URL, json=payload)  # consider timeout
-        res.raise_for_status()
-        vector = res.json()["embedding"]
-        key = "emb:" + hashlib.sha256(txt.encode("utf-8")).hexdigest()
-        REDIS.setex(key, 86400, json.dumps(vector))
-        results[idx] = vector
 
-    return results
+        try:
+            res = requests.post(
+                EMBED_URL,
+                json=payload,
+                timeout=EMBED_TIMEOUT,
+            )
+            res.raise_for_status()
+            vectors = res.json()["embeddings"]
+
+        except Exception as e:
+            # 🔥 FAIL SAFE: zero-vector fallback
+            dim = 768
+            vectors = [[0.0] * dim for _ in batch]
+
+        for item, vector in zip(batch, vectors):
+            idx = item["index"]
+            text = item["text"]
+
+            results[idx] = vector
+            REDIS.setex(
+                _cache_key(text),
+                CACHE_TTL,
+                json.dumps(vector),
+            )
+
+    return results  # type: ignore
+
+
+def create_embedding(text: str) -> List[float]:
+    return create_embeddings([text])[0]

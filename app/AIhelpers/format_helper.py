@@ -1,189 +1,136 @@
 import os
-import logging
-from typing import Iterator, Tuple
+import csv
+import fitz
+import docx
+import pandas as pd
+from PIL import Image
 
-from PIL import Image, ImageOps
-import pytesseract
+# ✅ SAFE OCR (centralized, env-based)
+from app.ocr import safe_ocr
 
-# Setup Logger
-logger = logging.getLogger("ai_modul.format_helper")
 
-import os
-import pytesseract
-import logging
+def iter_file_pages(file_path: str):
+    """
+    Yields: (page_number, text, ocr_used)
+    """
+    ext = os.path.splitext(file_path)[1].lower()
 
-logger = logging.getLogger("ai_modul.format_helper")
+    if ext == ".pdf":
+        yield from extract_pdf(file_path)
+    elif ext == ".docx":
+        yield from extract_docx(file_path)
+    elif ext in [".xls", ".xlsx"]:
+        yield from extract_excel(file_path)
+    elif ext == ".csv":
+        yield from extract_csv(file_path)
+    elif ext == ".txt":
+        yield from extract_txt(file_path)
+    elif ext in [".png", ".jpg", ".jpeg"]:
+        yield from extract_image(file_path)
+    else:
+        raise ValueError(f"Unsupported file type: {ext}")
 
-TESSERACT_CMD = os.getenv("TESSERACT_CMD")
 
-if TESSERACT_CMD:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-    logger.info("Using Tesseract from ENV: %s", TESSERACT_CMD)
-else:
-    logger.info("Using system Tesseract (PATH)")
+# =========================
+# EXTRACTORS
+# =========================
 
-try:
-    import docx
-except Exception:
-    docx = None
+def extract_pdf(path):
+    doc = fitz.open(path)
 
-try:
-    import pandas as pd
-except Exception:
-    pd = None
+    for page_no, page in enumerate(doc, start=1):
+        text = page.get_text().strip()
 
-from .pdf_helper import iter_pdf_pages
+        if text:
+            yield page_no, text, False
+        else:
+            # OCR fallback (SAFE)
+            pix = page.get_pixmap()
+            img = Image.frombytes(
+                "RGB",
+                [pix.width, pix.height],
+                pix.samples
+            )
+            ocr_text = safe_ocr(img)
+            if ocr_text.strip():
+                yield page_no, ocr_text, True
 
-IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif'}
 
-def _ocr_image(path: str) -> str:
-    """Performs OCR on an image with preprocessing fallbacks."""
-    logger.info("OCR: Processing image file: %s", path)
-    try:
-        img = Image.open(path)
-    except Exception as e:
-        logger.error("OCR: Failed to open image: %s", e)
-        return ''
+def extract_docx(path):
+    """
+    Generic DOCX extractor:
+    - Deduplicates repeated layout text
+    - Works for resumes, reports, tables, mixed content
+    """
+    d = docx.Document(path)
 
-    texts = []
-    n_frames = getattr(img, "n_frames", 1)
-    
-    for frame in range(n_frames):
-        try:
-            if n_frames > 1:
-                img.seek(frame)
+    seen = set()
+    lines = []
 
-            frame_img = img.convert('RGB')
-
-            # 1. Try baseline OCR
-            txt = pytesseract.image_to_string(frame_img).strip()
-            if txt:
-                logger.info("OCR: Text detected using baseline on frame %d", frame)
-                texts.append(txt)
-                continue
-
-            # 2. Preprocess: grayscale, resize, autocontrast
-            logger.info("OCR: No text found in baseline. Attempting preprocessing on frame %d", frame)
-            gray = ImageOps.grayscale(frame_img)
-            w, h = gray.size
-            up = gray.resize((min(4000, w * 2), min(4000, h * 2)))
-            up = ImageOps.autocontrast(up)
-
-            # Try thresholding
-            try:
-                bw = up.point(lambda p: 255 if p > 160 else 0)
-            except Exception:
-                bw = up
-
-            txt2 = pytesseract.image_to_string(bw).strip()
-            if txt2:
-                texts.append(txt2)
-            else:
-                # final fallback to resized grayscale
-                txt3 = pytesseract.image_to_string(up).strip()
-                texts.append(txt3)
-
-        except Exception as e:
-            logger.error("OCR: Frame %d processing failed: %s", frame, e)
+    for p in d.paragraphs:
+        t = p.text.strip()
+        if not t:
             continue
 
-    final_text = "\n".join(t for t in texts if t).strip()
-    logger.info("OCR: Completed. Total characters extracted: %d", len(final_text))
-    return final_text
+        t = " ".join(t.split())
+        key = t.lower()
 
-def iter_file_pages(file_path: str, file_type: str = None) -> Iterator[Tuple[str, bool]]:
-    """
-    Yield (text, ocr_used_flag) for the given file. 
-    Supports PDFs, docx, images, xlsx, csv.
-    """
-    _, ext = os.path.splitext(file_path)
-    ext = ext.lower()
-    file_type = (file_type or '').lower()
+        if key in seen:
+            continue
 
-    # 1. PDFs
-    if ext == '.pdf' or 'pdf' in file_type:
-        logger.info("Routing to PDF handler: %s", file_path)
-        for t, o in iter_pdf_pages(file_path):
-            yield t, o
-        return
+        seen.add(key)
+        lines.append(t)
 
-    # 2. DOCX
-    if (ext == '.docx') or (file_type and 'word' in file_type):
-        logger.info("Routing to DOCX handler: %s", file_path)
-        if docx is None:
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    yield f.read(), False
-                    return
-            except Exception:
-                yield '', False
-                return
+    if lines:
+        yield 1, "\n".join(lines), False
 
-        doc = docx.Document(file_path)
-        paragraph_texts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        block_size = 40
-        for i in range(0, len(paragraph_texts), block_size):
-            yield '\n'.join(paragraph_texts[i:i + block_size]), False
-        return
 
-    # 3. Images (Explicit OCR Branch)
-    if ext in IMAGE_EXTS or (file_type and 'image' in file_type):
-        logger.info("Routing to Image OCR handler: %s", file_path)
-        try:
-            text = _ocr_image(file_path)
-            yield text, True
-        except Exception as e:
-            logger.error("Image OCR routing failed: %s", e)
-            yield '', False
-        return
+def extract_excel(path):
+    sheets = pd.read_excel(path, sheet_name=None)
+    page = 1
 
-    # 4. Excel
-    if (ext in {'.xls', '.xlsx'}) or (file_type and 'excel' in file_type):
-        logger.info("Routing to Excel handler: %s", file_path)
-        if pd is None:
-            yield '', False
-            return
-        try:
-            sheets = pd.read_excel(file_path, sheet_name=None)
-            for name, df in sheets.items():
-                rows = []
-                for r in df.fillna('').astype(str).values:
-                    rows.append(' '.join(r))
-                yield '\n'.join(rows), False
-        except Exception as e:
-            logger.error("Excel processing failed: %s", e)
-            yield '', False
-        return
+    for sheet_name, df in sheets.items():
+        df = df.dropna(how="all")
+        if df.empty:
+            continue
 
-    # 5. CSV or Text
-    if ext in {'.csv', '.txt'} or (file_type and ('csv' in file_type or 'text' in file_type)):
-        logger.info("Routing to Text/CSV handler: %s", file_path)
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                buf = []
-                for line in f:
-                    buf.append(line.rstrip('\n'))
-                    if len(buf) >= 2000:
-                        yield '\n'.join(buf), False
-                        buf = []
-                if buf:
-                    yield '\n'.join(buf), False
-        except Exception:
-            yield '', False
-        return
+        rows = []
+        for _, row in df.iterrows():
+            values = [str(v) for v in row if pd.notna(v)]
+            if values:
+                rows.append(" | ".join(values))
 
-    # Fallback
-    logger.warning("No specific handler for %s. Attempting OCR fallback.", ext)
-    try:
-        text = _ocr_image(file_path)
+        if rows:
+            text = f"[SHEET: {sheet_name}]\n" + "\n".join(rows)
+            yield page, text, False
+            page += 1
+
+
+def extract_csv(path):
+    rows = []
+
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if row:
+                rows.append(" | ".join(row))
+
+    if rows:
+        yield 1, "\n".join(rows), False
+
+
+def extract_txt(path):
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        text = f.read().strip()
         if text:
-            yield text, True
-            return
-    except Exception:
-        pass
+            yield 1, text, False
 
-    try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            yield f.read(), False
-    except Exception:
-        yield '', False
+
+def extract_image(path):
+    img = Image.open(path)
+
+    # SAFE OCR — no crash if tesseract missing
+    text = safe_ocr(img)
+
+    if text.strip():
+        yield 1, text, True

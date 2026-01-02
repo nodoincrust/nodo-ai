@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.controllers.Admincontroller import router as parentRoute
 from app.controllers.CompanyController import router as deptRoute
 from app.controllers.DocumentController import router as deptroute
+from app.controllers.EmployeeController import router as empRoute
 from app.db import engine
 from app.models import Base
 from app import models
@@ -25,6 +26,7 @@ app.include_router(parentRoute)
 app.include_router(deptRoute)
 app.include_router(ai_router)
 app.include_router(deptroute)
+app.include_router(empRoute)
 
 @app.get("/")
 def greet():

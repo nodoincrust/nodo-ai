@@ -26,6 +26,7 @@ class CreateCompanySchema(BaseModel):
     name: str = Field(..., max_length=255)
     contact_person: str = Field(..., max_length=255)
     contact_email: EmailStr
+    contact_number:str=Field(..., max_length=10)
     total_space: int = Field(..., gt=0, description="Total storage space in gb")
 
 

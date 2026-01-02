@@ -4,7 +4,6 @@ import shutil
 import tempfile
 import os
 import uuid
-import requests
 
 from app.helpers import get_db
 from app.services.document_service import create_document_draft,save_document,process_document

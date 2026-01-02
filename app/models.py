@@ -70,6 +70,7 @@ class Company(Base):
     name = Column(String(255), nullable=False)
     contact_person = Column(String(255))
     contact_email = Column(String(255), unique=False, nullable=False)
+    contact_number=Column(String(10),unique=True,nullable=False)
 
     created_by = Column(
         BigInteger,

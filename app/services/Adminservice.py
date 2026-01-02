@@ -179,6 +179,7 @@ def create_company_service(
             name=payload.name,
             contact_person=payload.contact_person,
             contact_email=payload.contact_email,
+            contact_number=payload.contact_number,
             total_space=total_space_bytes,
             remaining_space=total_space_bytes,
             created_by=current_user["user_id"],

@@ -6,10 +6,10 @@ import os
 import uuid
 
 from app.helpers import get_db
-from app.services.document_service import create_document_draft,save_document,process_document
+from app.services.document_service import create_document_draft,save_document,process_document,assign_document
 
 from app.helpers import get_current_user
-from app.schemas import DocumentSaveSchema
+from app.schemas import DocumentSaveSchema,DocumentAssignSchema
 
 router = APIRouter(prefix="/newdocuments", tags=["Documents"])
 
@@ -89,4 +89,24 @@ def save_document_api(
         "status": "success",
         "message": "Document submitted successfully",
         "data": result,
+    }
+    
+
+@router.post("/{document_id}/assign")
+def assign_doc(
+    document_id:int,
+    payload:DocumentAssignSchema,
+    db:Session=Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    assign_document(
+        db=db,
+        document_id=document_id,
+        assign_level=payload.assign_level,
+        current_user=current_user
+    )
+    
+    return {
+        "statusCode":200,
+        "message":"Document Assigned"
     }

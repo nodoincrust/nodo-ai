@@ -6,7 +6,7 @@ import os
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import HTTPException, Depends
 from jose import jwt, JWTError
-from app.enum import UserRole
+from app.enum import UserRole,ROLE_LEVEL
 from app.models import Department, User
 from sqlalchemy.orm import Session
 from app.db import SessionLocal
@@ -147,3 +147,45 @@ def bytes_to_gb(byte_size:int)->float:
 def bytes_to_mb(byte_size:int)->float:
     return round(byte_size/MB,2)
     
+def resolve_hierarchy(db: Session, current_user: dict):
+    company_id = current_user["company_id"]
+    department_id = current_user.get("department_id")
+
+    # 1️⃣ Department Head
+    dept_head = None
+    if department_id:
+        department = (
+            db.query(Department)
+            .filter(
+                Department.id == department_id,
+                Department.company_id == company_id,
+                Department.is_active.is_(True),
+                Department.is_delete.is_(False),
+            )
+            .first()
+        )
+
+        if department and department.head_user_id:
+            dept_head = (
+                db.query(User)
+                .filter(
+                    User.id == department.head_user_id,
+                    User.is_active.is_(True),
+                    User.is_delete.is_(False),
+                )
+                .first()
+            )
+
+    # 2️⃣ Company Admin
+    company_head = (
+        db.query(User)
+        .filter(
+            User.company_id == company_id,
+            User.role == UserRole.COMPANY_ADMIN,
+            User.is_active.is_(True),
+            User.is_delete.is_(False),
+        )
+        .first()
+    )
+
+    return dept_head, company_head

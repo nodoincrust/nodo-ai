@@ -23,6 +23,8 @@ from app.db import Base
 from app.enum import UserRole
 
 
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -212,7 +214,9 @@ class Document(Base):
     )
 
     current_version = Column(Integer, default=1)
-
+    current_step_order = Column(Integer, nullable=True)
+    current_assignee_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String, default="DRAFT")
     is_active = Column(Boolean, default=True)
     is_delete = Column(Boolean, default=False)
 
@@ -388,4 +392,22 @@ class DocumentReview(Base):
     )
 
     comments = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+
+class DocumentApprovalStep(Base):
+    __tablename__ = "document_approval_steps"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
+
+    step_order = Column(Integer, nullable=False)
+    assigned_to = Column(Integer, ForeignKey("users.id"), nullable=False)
+    approver_type = Column(String, nullable=False)
+    
+    status = Column(String, default="PENDING")  # PENDING | APPROVED | REJECTED
+
+    remarks = Column(String)
+    action_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)

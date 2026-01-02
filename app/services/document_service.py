@@ -5,11 +5,12 @@ from fastapi import HTTPException
 from app.db import SessionLocal
 import shutil
 import os
-from app.models import AIDocument, DocuementChunks,DocumentVersion,DocumentReview,Document,Company
+from app.models import AIDocument, DocuementChunks,DocumentVersion,DocumentReview,Document,Company,DocumentApprovalStep
 from app.AIhelpers.pdf_helper import extract_pdf_text
 from app.AIhelpers.chunk_helper import chunk_text
 from app.AIhelpers.embedding_helper import create_embedding
 from app.schemas import DocumentSaveSchema
+from app.helpers import resolve_hierarchy
 BASE_STORAGE_PATH = "storage"
 
 def process_document(
@@ -137,7 +138,7 @@ def create_document_draft(
     department_id: int,
     current_user: dict,
 ):
-    # 1️⃣ Fetch company
+    # Fetch company
     company = (
         db.query(Company)
         .filter(
@@ -150,7 +151,7 @@ def create_document_draft(
     if not company:
         raise HTTPException(404, "Company not found")
 
-    # 2️⃣ Create business document (DRAFT)
+    # Create business document (DRAFT)
     document = Document(
         company_id=company.id,
         department_id=department_id,
@@ -160,7 +161,7 @@ def create_document_draft(
     db.add(document)
     db.flush()  # get document.id
 
-    # 3️⃣ Permanent storage path
+    #  Permanent storage path
     doc_dir = os.path.join(
         BASE_STORAGE_PATH,
         "companies",
@@ -175,12 +176,12 @@ def create_document_draft(
         f"v1_{original_filename}"
     )
 
-    # 4️⃣ Move temp file → permanent storage
+    #  Move temp file → permanent storage
     shutil.move(temp_file_path, permanent_path)
 
     file_size_bytes = os.path.getsize(permanent_path)
 
-    # 5️⃣ Create version v1
+    #  Create version v1
     version = DocumentVersion(
         document_id=document.id,
         version_number=1,
@@ -192,9 +193,88 @@ def create_document_draft(
     )
     db.add(version)
 
-    # 6️⃣ Deduct storage
+    # Deduct storage
     company.remaining_space -= file_size_bytes
 
     db.commit()
 
     return document.id
+
+def assign_document(
+    db: Session,
+    document_id: int,
+    assign_level: str,
+    current_user: dict,
+):
+    # 1️⃣ Fetch document & ownership check
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.uploaded_by == current_user["user_id"],
+            Document.is_delete.is_(False),
+        )
+        .first()
+    )
+
+    if not document:
+        raise HTTPException(404, "Document not found")
+
+    # 2️⃣ Resolve hierarchy
+    dept_head, company_head = resolve_hierarchy(db, current_user)
+
+    # 3️⃣ Build approval chain with approver_type
+    candidates: list[tuple[User, str]] = []
+
+    if assign_level == "DEPARTMENT_HEAD":
+        if not dept_head:
+            raise HTTPException(400, "Department head not assigned")
+
+        candidates.append((dept_head, "DEPARTMENT_HEAD"))
+
+    elif assign_level == "COMPANY_ADMIN":
+        if not dept_head:
+            raise HTTPException(400, "Department head not assigned")
+        if not company_head:
+            raise HTTPException(400, "Company admin not found")
+
+        candidates.append((dept_head, "DEPARTMENT_HEAD"))
+        candidates.append((company_head, "COMPANY_ADMIN"))
+
+    else:
+        raise HTTPException(400, "Invalid assign level")
+
+    # 4️⃣ Deduplicate approvers
+    approval_chain: list[tuple[User, str]] = []
+    seen = set()
+
+    for user, approver_type in candidates:
+        if user.id not in seen:
+            approval_chain.append((user, approver_type))
+            seen.add(user.id)
+
+    if not approval_chain:
+        raise HTTPException(400, "No approvers found")
+
+    # 5️⃣ Clear old approval steps
+    db.query(DocumentApprovalStep).filter(
+        DocumentApprovalStep.document_id == document.id
+    ).delete(synchronize_session=False)
+
+    # 6️⃣ Create approval steps (✅ FIX HERE)
+    for idx, (user, approver_type) in enumerate(approval_chain, start=1):
+        db.add(
+            DocumentApprovalStep(
+                document_id=document.id,
+                step_order=idx,
+                assigned_to=user.id,
+                approver_type=approver_type,  # ✅ THIS IS THE KEY FIX
+            )
+        )
+
+    # 7️⃣ Update document tracking
+    document.status = "IN_REVIEW"
+    document.current_step_order = 1
+    document.current_assignee_id = approval_chain[0][0].id
+
+    db.commit()

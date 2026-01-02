@@ -139,6 +139,7 @@ def verify_otp_service(email: str, otp: str, db: Session):
     user_data = {
         "name": user.name,
         "email": user.email,
+        "role":user.role
     }
 
     return {
@@ -199,7 +200,10 @@ def create_company_service(
         db.add(user)
         db.commit()
 
-        return {"company_id": company.id, "company_admin_user_id": user.id}
+        data = {
+            "company_id": company.id, "company_admin_user_id": user.id
+        }
+        return {"statusCode":200,"data":data,"message":"Company added successfully"}
 
     except HTTPException:
         db.rollback()
@@ -292,8 +296,8 @@ def delete_company_service(companyId: int, db: Session, user: dict):
         db.commit()
 
         return {
-            "status": 200,
-            "detail": "Company and associated users deleted successfully",
+            "statusCode": 200,
+            "message": "Company and associated users deleted successfully",
         }
 
     except Exception:
@@ -327,6 +331,15 @@ def update_company_details(
 
     if payload.name is not None:
         company.name = payload.name
+    
+    if payload.contact_number is not None:
+        company.contact_number=payload.contact_number
+    
+    if payload.total_space is not None:
+        company.total_space=payload.total_space
+        
+    if payload.is_active is not None:
+        company.is_active=payload.is_active
 
     if payload.contact_person is not None:
         company.contact_person = payload.contact_person
@@ -369,9 +382,9 @@ def update_company_details(
         db.refresh(company)
 
         return {
-            "status": 200,
-            "detail": "Company and admin user updated successfully",
+            "statusCode": 200,
             "data": company,
+            "message": "Company details updated successfully"
         }
     except Exception as e:
         db.rollback()

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional,List,Literal
+from typing import Optional, List, Literal
 from datetime import datetime
 from uuid import UUID
 
@@ -26,7 +26,7 @@ class CreateCompanySchema(BaseModel):
     name: str = Field(..., max_length=255)
     contact_person: str = Field(..., max_length=255)
     contact_email: EmailStr
-    contact_number:str=Field(..., max_length=10)
+    contact_number: str = Field(..., max_length=10)
     total_space: int = Field(..., gt=0, description="Total storage space in gb")
 
 
@@ -59,9 +59,9 @@ class UpdateCompanySchema(BaseModel):
     name: str
     contact_person: str
     contact_email: EmailStr
-    contact_number:int
-    total_space:int
-    is_active:bool
+    contact_number: int
+    total_space: int
+    is_active: bool
 
 
 class UserResponseSchema(BaseModel):
@@ -134,12 +134,14 @@ class CreateDepartmentSchema(BaseModel):
     name: str
     description: str | None = None
     head_user_id: int | None = None
+    is_active: bool
 
 
 class UpdateDeptSchema(BaseModel):
     name: str | None = None
     description: str | None = None
     head_user_id: int | None = None
+    is_active: bool
 
 
 class UpdateDeptStatusSchema(BaseModel):
@@ -212,16 +214,31 @@ class SummeryResponse(BaseModel):
     summary: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
 class DocumentSaveSchema(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
-   
+
+
 class GetCompaniesRequest(BaseModel):
-    
+
     page: int = 1
     pagelimit: int = 10
     search: Optional[str] = None
-    
+
+
+class getDepartments(BaseModel):
+    page: int = 1
+    pagelimit: int = 10
+    search: Optional[str] = None
+
 
 class DocumentAssignSchema(BaseModel):
-    assign_level: Literal[ "DEPARTMENT_HEAD", "COMPANY_ADMIN"]
+    assignee_ids: list[int]
+
+
+class GetEmployee(BaseModel):
+    page: int = 1
+    pagelimit: int = 10
+    search: Optional[str] = None

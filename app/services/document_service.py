@@ -5,13 +5,23 @@ from fastapi import HTTPException
 from app.db import SessionLocal
 import shutil
 import os
-from app.models import AIDocument, DocuementChunks,DocumentVersion,DocumentReview,Document,Company,DocumentApprovalStep
+from app.models import (
+    AIDocument,
+    DocuementChunks,
+    DocumentVersion,
+    DocumentReview,
+    Document,
+    Company,
+    DocumentApprovalStep,
+)
 from app.AIhelpers.pdf_helper import extract_pdf_text
 from app.AIhelpers.chunk_helper import chunk_text
 from app.AIhelpers.embedding_helper import create_embedding
 from app.schemas import DocumentSaveSchema
 from app.helpers import resolve_hierarchy
+
 BASE_STORAGE_PATH = "storage"
+
 
 def process_document(
     file_path: str,
@@ -24,7 +34,6 @@ def process_document(
     """Full document ingestion pipeline"""
     db: Session = SessionLocal()
     try:
-        # Store document metadata
         doc = AIDocument(
             document_id=document_id,
             session_id=session_id,
@@ -35,13 +44,10 @@ def process_document(
         db.add(doc)
         db.commit()
 
-        # Extract text (OCR fallback)
         text, ocr_used = extract_pdf_text(file_path)
 
-        # Chunk text
         chunks = chunk_text(text)
 
-        # Store chunks + embeddings (batched)
         objects = []
         for idx, chunk in enumerate(chunks):
             emb = create_embedding(chunk)
@@ -70,9 +76,7 @@ def process_document(
         db.close()
 
 
-
-
-def save_document(
+def save_document_draft(
     db: Session,
     document_id: int,
     payload: DocumentSaveSchema,
@@ -82,6 +86,7 @@ def save_document(
         db.query(Document)
         .filter(
             Document.id == document_id,
+            Document.uploaded_by == current_user["user_id"],
             Document.is_delete.is_(False),
         )
         .first()
@@ -90,11 +95,8 @@ def save_document(
     if not document:
         raise HTTPException(404, "Document not found")
 
-    if document.uploaded_by != current_user["user_id"]:
-        raise HTTPException(403, "You cannot save this document")
-
     if document.status != "DRAFT":
-        raise HTTPException(400, "Only draft documents can be saved")
+        raise HTTPException(400, "Only draft documents can be edited")
 
     version = (
         db.query(DocumentVersion)
@@ -112,22 +114,15 @@ def save_document(
     if payload.tags is not None:
         version.tags = payload.tags
 
-    document.status = "SUBMITTED"
-
-    review = DocumentReview(
-        document_id=document.id,
-        reviewed_by=None,  
-        status="PENDING",
-    )
-
-    db.add(review)
     db.commit()
 
     return {
         "document_id": document.id,
         "status": document.status,
+        "summary": version.summary,
+        "tags": version.tags,
     }
-    
+
 
 def create_document_draft(
     db: Session,
@@ -138,7 +133,6 @@ def create_document_draft(
     department_id: int,
     current_user: dict,
 ):
-    # Fetch company
     company = (
         db.query(Company)
         .filter(
@@ -151,7 +145,6 @@ def create_document_draft(
     if not company:
         raise HTTPException(404, "Company not found")
 
-    # Create business document (DRAFT)
     document = Document(
         company_id=company.id,
         department_id=department_id,
@@ -159,9 +152,8 @@ def create_document_draft(
         status="DRAFT",
     )
     db.add(document)
-    db.flush()  # get document.id
+    db.flush()
 
-    #  Permanent storage path
     doc_dir = os.path.join(
         BASE_STORAGE_PATH,
         "companies",
@@ -171,17 +163,13 @@ def create_document_draft(
     )
     os.makedirs(doc_dir, exist_ok=True)
 
-    permanent_path = os.path.join(
-        doc_dir,
-        f"v1_{original_filename}"
-    )
+    permanent_path = os.path.join(doc_dir, f"v1_{original_filename}")
 
-    #  Move temp file → permanent storage
     shutil.move(temp_file_path, permanent_path)
+    document.current_file_path = permanent_path
 
     file_size_bytes = os.path.getsize(permanent_path)
 
-    #  Create version v1
     version = DocumentVersion(
         document_id=document.id,
         version_number=1,
@@ -193,12 +181,12 @@ def create_document_draft(
     )
     db.add(version)
 
-    # Deduct storage
     company.remaining_space -= file_size_bytes
 
     db.commit()
 
     return document.id
+
 
 def assign_document(
     db: Session,
@@ -206,7 +194,6 @@ def assign_document(
     assign_level: str,
     current_user: dict,
 ):
-    # 1️⃣ Fetch document & ownership check
     document = (
         db.query(Document)
         .filter(
@@ -220,10 +207,8 @@ def assign_document(
     if not document:
         raise HTTPException(404, "Document not found")
 
-    # 2️⃣ Resolve hierarchy
     dept_head, company_head = resolve_hierarchy(db, current_user)
 
-    # 3️⃣ Build approval chain with approver_type
     candidates: list[tuple[User, str]] = []
 
     if assign_level == "DEPARTMENT_HEAD":
@@ -244,7 +229,6 @@ def assign_document(
     else:
         raise HTTPException(400, "Invalid assign level")
 
-    # 4️⃣ Deduplicate approvers
     approval_chain: list[tuple[User, str]] = []
     seen = set()
 
@@ -256,23 +240,21 @@ def assign_document(
     if not approval_chain:
         raise HTTPException(400, "No approvers found")
 
-    # 5️⃣ Clear old approval steps
     db.query(DocumentApprovalStep).filter(
         DocumentApprovalStep.document_id == document.id
     ).delete(synchronize_session=False)
 
-    # 6️⃣ Create approval steps (✅ FIX HERE)
     for idx, (user, approver_type) in enumerate(approval_chain, start=1):
         db.add(
             DocumentApprovalStep(
                 document_id=document.id,
                 step_order=idx,
                 assigned_to=user.id,
-                approver_type=approver_type,  # ✅ THIS IS THE KEY FIX
+                approver_type=approver_type,
             )
         )
 
-    # 7️⃣ Update document tracking
+    # Update document tracking
     document.status = "IN_REVIEW"
     document.current_step_order = 1
     document.current_assignee_id = approval_chain[0][0].id

@@ -21,6 +21,7 @@ from app.AIhelpers.ai_helper import (
 )
 from app.services.ai_DBservice import create_chat_session
 from app.services.document_service import process_document
+
 router = APIRouter(prefix="/ai")
 
 
@@ -83,33 +84,7 @@ async def chat_api(request: ChatRequest):
     }
 
 
-# @router.post("/chat/stream")
-# async def chat_stream_api(request: ChatRequest):
-
-#     session_id = request.session_id or create_chat_session()
-
-#     return StreamingResponse(
-#         handle_chat_stream(
-#             session_id=session_id,
-#             query=request.query
-#         ),
-#         media_type="text/plain"
-#     )
-
-# @router.post("/chat/citation")
-# async def chat_with_citation_api(request: CitationRequest):
-
-#     session_id = create_chat_session()
-
-#     return handle_chat_with_citation(
-#         session_id=session_id,
-#         query=request.query,
-#         document_id=request.document_id
-#     )
-
-
 @router.get("/summary/{document_id}")
-
 def summarize_document(document_id: str):
     # Generate and return a document summary.
     return handle_summary(document_id)

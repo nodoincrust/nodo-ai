@@ -20,16 +20,14 @@ class ApprovalStatus(str, Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
-    
-    
-    
+
+
 ROLE_LEVEL = {
     "EMPLOYEE": 1,
     "SENIOR": 2,
     "DEPARTMENT_HEAD": 3,
     "COMPANY_ADMIN": 4,
 }
-
 
 
 SIDEBAR_MENU = {

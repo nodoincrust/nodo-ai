@@ -13,8 +13,9 @@ from app.models import (
     ChatSession,
     SessionMessages,
     SessionMemorySummery,
-    DocuemntSummery
+    DocuemntSummery,
 )
+
 
 def create_document(
     self,
@@ -24,7 +25,7 @@ def create_document(
     file_size_mb: float,
     session_id: Optional[str] = None,
 ) -> AIDocument:
-    doc = AIDocument (
+    doc = AIDocument(
         document_id=document_id,
         session_id=session_id,
         filename=filename,

@@ -6,17 +6,23 @@ import os
 import uuid
 
 from app.helpers import get_db
-from app.services.document_service import create_document_draft,save_document,process_document,assign_document
-
+from app.services.document_service import (
+    create_document_draft,
+    save_document_draft,
+    process_document,
+    assign_document,
+)
+from app.models import Document
 from app.helpers import get_current_user
-from app.schemas import DocumentSaveSchema,DocumentAssignSchema
+from app.schemas import DocumentSaveSchema, DocumentAssignSchema
 
-router = APIRouter(prefix="/newdocuments", tags=["Documents"])
+router = APIRouter(prefix="/nodo/newdocuments", tags=["Documents"])
 
 
 @router.get("/")
 def greet():
     return "Hello Dept"
+
 
 @router.post("/upload")
 async def upload_document(
@@ -46,7 +52,7 @@ async def upload_document(
             file_size_mb=file_size_mb,
         )
 
-        # ✅ create business draft
+        #  create business draft
         business_document_id = create_document_draft(
             db=db,
             ai_document_id=document_id,
@@ -70,15 +76,33 @@ async def upload_document(
             os.remove(temp_path)
 
 
-
-@router.post("/{document_id}/save")
-def save_document_api(
+@router.put("/{document_id}/metadata")
+def save_document_metadata(
     document_id: int,
     payload: DocumentSaveSchema,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    result = save_document(
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.uploaded_by == current_user["user_id"],
+            Document.is_delete.is_(False),
+        )
+        .first()
+    )
+
+    if not document:
+        raise HTTPException(404, "Document not found")
+
+    if document.status != "DRAFT":
+        raise HTTPException(
+            400,
+            f"Metadata can only be edited in DRAFT state. Current status: {document.status}",
+        )
+
+    result = save_document_draft(
         db=db,
         document_id=document_id,
         payload=payload,
@@ -87,26 +111,6 @@ def save_document_api(
 
     return {
         "status": "success",
-        "message": "Document submitted successfully",
+        "message": "Draft metadata saved",
         "data": result,
-    }
-    
-
-@router.post("/{document_id}/assign")
-def assign_doc(
-    document_id:int,
-    payload:DocumentAssignSchema,
-    db:Session=Depends(get_db),
-    current_user=Depends(get_current_user)
-):
-    assign_document(
-        db=db,
-        document_id=document_id,
-        assign_level=payload.assign_level,
-        current_user=current_user
-    )
-    
-    return {
-        "statusCode":200,
-        "message":"Document Assigned"
     }

@@ -23,8 +23,6 @@ from app.db import Base
 from app.enum import UserRole
 
 
-
-
 class User(Base):
     __tablename__ = "users"
 
@@ -33,7 +31,7 @@ class User(Base):
     company_id = Column(
         BigInteger,
         ForeignKey("companies.id"),
-        nullable=True,  # SYSTEM_ADMIN allowed
+        nullable=True,
     )
 
     role = Column(Enum(UserRole, name="user_role_enum"), nullable=False, index=True)
@@ -72,7 +70,7 @@ class Company(Base):
     name = Column(String(255), nullable=False)
     contact_person = Column(String(255))
     contact_email = Column(String(255), unique=False, nullable=False)
-    contact_number=Column(String(10),unique=True,nullable=False)
+    contact_number = Column(String(10), unique=True, nullable=False)
 
     created_by = Column(
         BigInteger,
@@ -149,6 +147,7 @@ class Department(Base):
 # from db import Base
 EMBEDDING_DIMENSION = 768
 
+
 class AIDocument(Base):
     __tablename__ = "ai_documents"
 
@@ -190,6 +189,7 @@ class AIDocument(Base):
         cascade="all, delete-orphan",
     )
 
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -198,6 +198,7 @@ class Document(Base):
     company_id = Column(BigInteger, ForeignKey("companies.id"), nullable=False)
     department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=False)
     uploaded_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    current_file_path = Column(Text, nullable=True)
 
     status = Column(
         Enum(
@@ -223,7 +224,6 @@ class Document(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-
 class DocuementChunks(Base):
     __tablename__ = "Docuement_Chunks"
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -240,8 +240,8 @@ class DocuementChunks(Base):
     embedding = Column(Vector(EMBEDDING_DIMENSION), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    document = relationship("AIDocument", back_populates="chunks") 
- 
+    document = relationship("AIDocument", back_populates="chunks")
+
 
 class DocuemntSummery(Base):
     __tablename__ = "Document_Summaries"
@@ -263,7 +263,6 @@ class DocuemntSummery(Base):
     )
 
     document = relationship("AIDocument", back_populates="summary")
-
 
 
 class ChatSession(Base):
@@ -323,18 +322,6 @@ class SessionMemorySummery(Base):
     session = relationship("ChatSession", back_populates="memorySummery")
 
 
-# class SidebarMenu(Base):
-#     __tablename__ = "sidebar_menus"
-
-#     id = Column(BigInteger, primary_key=True)
-#     menu_key = Column(String(50), unique=True, nullable=False)
-#     label = Column(String(100), nullable=False)
-#     path = Column(String(255), nullable=False)
-#     icon = Column(String(50), nullable=True)
-#     sort_order = Column(Integer, default=0)
-#     is_active = Column(Boolean, default=True)
-
-
 class SidebarMenu(Base):
     __tablename__ = "sidebar_menus"
 
@@ -343,7 +330,7 @@ class SidebarMenu(Base):
     label = Column(String(100), nullable=False)
     path = Column(String(255), nullable=False)
     icon = Column(Text)
-    icon_active=Column(Text)
+    icon_active = Column(Text)
     sort_order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
 
@@ -358,6 +345,7 @@ class RoleSidebarMapping(Base):
     )
 
     menu = relationship("SidebarMenu")
+
 
 class DocumentVersion(Base):
     __tablename__ = "document_versions"
@@ -379,6 +367,7 @@ class DocumentVersion(Base):
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
 class DocumentReview(Base):
     __tablename__ = "document_reviews"
 
@@ -395,7 +384,6 @@ class DocumentReview(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-
 class DocumentApprovalStep(Base):
     __tablename__ = "document_approval_steps"
 
@@ -405,8 +393,8 @@ class DocumentApprovalStep(Base):
     step_order = Column(Integer, nullable=False)
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=False)
     approver_type = Column(String, nullable=False)
-    
-    status = Column(String, default="PENDING")  # PENDING | APPROVED | REJECTED
+
+    status = Column(String, default="PENDING")  
 
     remarks = Column(String)
     action_at = Column(DateTime)

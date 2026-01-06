@@ -154,6 +154,7 @@ class CreateEmployeeSchema(BaseModel):
     department_id: Optional[int] = None
     designation: str = Field(..., max_length=255)
     reports_to: Optional[int] = None
+    is_active:bool
 
 
 class UpdateEmployeeSchema(BaseModel):
@@ -162,6 +163,7 @@ class UpdateEmployeeSchema(BaseModel):
     department_id: Optional[int] = None
     reports_to: Optional[int] = None
     designation: Optional[str]
+    is_active:bool
 
 
 class UpdateEmployeeStatusSchema(BaseModel):
@@ -169,58 +171,47 @@ class UpdateEmployeeStatusSchema(BaseModel):
 
 
 # ------------------------ AI schemas ------------------------
-class CreateSessionResponse(BaseModel):
-    session_id: str
+# DOCUMENT UPLOAD RESPONSE
 
-
-class ChatRequest(BaseModel):
-    session_id: Optional[str] = None
-    query: str
-
-
-class CitationRequest(BaseModel):
-    query: str
-    document_id: Optional[str] = None
-
-
-class ChatResponse(BaseModel):
-    session_id: str
-    response: str
-
-
-class AskRequest(BaseModel):
-    question: str
-
-
-class AskTextPayload(BaseModel):
-    text: str
-    question: str
-    mode: str = "docuemnts"  # or "web"
-
-
-class UploadResponse(BaseModel):
-    document_id: str
+class UploadAIResponse(BaseModel):
+    document_id: int
     chunks: int
     message: str
 
+# CHAT (DOCUMENT-CENTRIC)
 
-class AnswerResponse(BaseModel):
-    question: str
+class ChatRequest(BaseModel):
+    document_id: int = Field(..., gt=0)
+    query: str = Field(..., min_length=1)
+
+
+class ChatResponse(BaseModel):
+    document_id: int
+    session_id: str
     answer: str
+    citations: List[dict]
 
-
-class SummeryResponse(BaseModel):
-    document_id: str
+class SummaryResponse(BaseModel):
+    document_id: int
     summary: str
+    tags: List[str]
+    citations: List[dict]
 
     model_config = ConfigDict(from_attributes=True)
-
 
 class DocumentSaveSchema(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
 
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=1)
 
+
+class AskTextPayload(BaseModel):
+    text: str = Field(..., min_length=1)
+    question: str = Field(..., min_length=1)
+    mode: str = Field(default="documents")
+   
 class GetCompaniesRequest(BaseModel):
 
     page: int = 1
@@ -233,6 +224,8 @@ class getDepartments(BaseModel):
     pagelimit: int = 10
     search: Optional[str] = None
 
+class getDepartmentList(BaseModel):
+    search:Optional[str]=None
 
 class DocumentAssignSchema(BaseModel):
     assignee_ids: list[int]
@@ -242,3 +235,6 @@ class GetEmployee(BaseModel):
     page: int = 1
     pagelimit: int = 10
     search: Optional[str] = None
+
+class GetEmployeeList(BaseModel):
+    search:Optional[str]=None

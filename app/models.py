@@ -11,17 +11,18 @@ from sqlalchemy import (
     Integer,
     Numeric,
     CheckConstraint,
-    Text,
+    UniqueConstraint,
+    JSON,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
+from sqlalchemy.sql import func
 from app.db import Base
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from pgvector.sqlalchemy import Vector
 from app.db import Base
 from app.enum import UserRole
-
 
 class User(Base):
     __tablename__ = "users"
@@ -147,53 +148,15 @@ class Department(Base):
 # from db import Base
 EMBEDDING_DIMENSION = 768
 
-
-class AIDocument(Base):
-    __tablename__ = "ai_documents"
-
-    document_id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-
-    session_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("sessions.session_id"),
-        nullable=True,
-    )
-
-    filename = Column(String, nullable=False)
-    file_type = Column(String, nullable=False)
-    file_size_mb = Column(
-        Numeric,
-        CheckConstraint("file_size_mb >= 0"),
-        nullable=True,
-    )
-
-    created_time = Column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
-    )
-
-    chunks = relationship(
-        "DocuementChunks",
-        back_populates="document",
-        cascade="all, delete-orphan",
-    )
-
-    summary = relationship(
-        "DocuemntSummery",
-        back_populates="document",
-        uselist=False,
-        cascade="all, delete-orphan",
-    )
+# =====================================================
+# DOCUMENT ROOT (SINGLE SOURCE OF TRUTH)
+# =====================================================
 
 
 class Document(Base):
     __tablename__ = "documents"
 
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(BigInteger, primary_key=True)
 
     company_id = Column(BigInteger, ForeignKey("companies.id"), nullable=False)
     department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=False)
@@ -209,9 +172,8 @@ class Document(Base):
             "REJECTED",
             name="document_status_enum",
         ),
-        nullable=False,
         default="DRAFT",
-        index=True,
+        nullable=False,
     )
 
     current_version = Column(Integer, default=1)
@@ -223,104 +185,178 @@ class Document(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
-class DocuementChunks(Base):
-    __tablename__ = "Docuement_Chunks"
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    session_id = Column(
-        PG_UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=True
-    )
-    chunk_index = Column(Integer, nullable=False)
-    chunk_text = Column(Text, nullable=False)
-    embedding = Column(Vector(EMBEDDING_DIMENSION), nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    document = relationship("AIDocument", back_populates="chunks")
-
-
-class DocuemntSummery(Base):
-    __tablename__ = "Document_Summaries"
-
-    document_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    summery_text = Column(Text, nullable=False)
-    created_at = Column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
-    )
-    updated_at = Column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
-
-    document = relationship("AIDocument", back_populates="summary")
-
-
-class ChatSession(Base):
-    __tablename__ = "sessions"
-    session_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    last_active = Column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
-
-    messages = relationship(
-        "SessionMessages", back_populates="session", cascade="all, delete-orphan"
-    )
-    memorySummery = relationship(
-        "SessionMemorySummery",
-        back_populates="session",
+    # 🔑 EXACTLY ONE AI DOCUMENT PER DOCUMENT
+    ai_document = relationship(
+        "AIDocument",
+        back_populates="document",
         uselist=False,
         cascade="all, delete-orphan",
     )
 
+# =====================================================
+# AI SESSION (CREATED ONLY VIA AIDocument)
+# =====================================================
 
-class SessionMessages(Base):
-    __tablename__ = "session_messages"
+class ChatSession(Base):
+    __tablename__ = "sessions"
+
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+# =====================================================
+# AI DOCUMENT (ENFORCES ONE DOCUMENT → ONE SESSION)
+# =====================================================
+
+class AIDocument(Base):
+    __tablename__ = "ai_documents"
+ 
+    id=Column(BigInteger, primary_key=True)
+ 
+    # 🔑 SAME AS documents.id (ONE-TO-ONE)
+    document_id = Column(
+        BigInteger, ForeignKey("documents.id"), nullable=False, index=True
+    )
+ 
+    # 🔒 SESSION IS MANDATORY & UNIQUE
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+ 
+    filename = Column(String(512), nullable=False)
+    file_type = Column(String(128))
+    file_size_mb = Column(Numeric)
+ 
+    created_at = Column(DateTime, server_default=func.now())
+ 
+    document = relationship("Document", back_populates="ai_document")
+ 
+    chunks = relationship(
+        "DocumentChunk",
+        back_populates="ai_document",
+        cascade="all, delete-orphan",
+    )
+ 
+    summary = relationship(
+        "DocumentSummary",
+        back_populates="ai_document",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+# =====================================================
+# DOCUMENT CHUNKS (STRICTLY DOCUMENT + SESSION SCOPED)
+# =====================================================
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    ai_document_id = Column(
+        BigInteger,
+        ForeignKey("ai_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
     session_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
         nullable=False,
     )
-    role = Column(String, nullable=False)  # 'user' or 'assistant'
-    content = Column(Text, nullable=False)
-    created_at = Column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+
+    chunk_index = Column(Integer, nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    embedding = Column(Vector(768))
+    page_number = Column(Integer)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    ai_document = relationship("AIDocument", back_populates="chunks")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "ai_document_id",
+            "chunk_index",
+            name="uq_ai_document_chunk_index",
+        ),
     )
 
-    __table_args__ = (CheckConstraint("role IN ('user', 'assistant','system')"),)
-    session = relationship("ChatSession", back_populates="messages")
+# =====================================================
+# DOCUMENT SUMMARY (ONE PER DOCUMENT)
+# =====================================================
 
+class DocumentSummary(Base):
+    __tablename__ = "document_summaries"
 
-class SessionMemorySummery(Base):
+    ai_document_id = Column(
+        BigInteger,
+        ForeignKey("ai_documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    summary_text = Column(Text, nullable=False)
+    tags = Column(JSONB)
+    citations = Column(JSONB)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    ai_document = relationship("AIDocument", back_populates="summary")
+
+# =====================================================
+# SESSION CHAT MESSAGES (DOCUMENT-SCOPED)
+# =====================================================
+
+class SessionMessage(Base):
+    __tablename__ = "session_messages"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    document_id = Column(
+        BigInteger,
+        ForeignKey("ai_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    role = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user','assistant','system')"),
+    )
+
+# =====================================================
+# SESSION MEMORY SUMMARY (ONE PER SESSION)
+# =====================================================
+
+class SessionMemorySummary(Base):
     __tablename__ = "session_memory_summaries"
+
     session_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
         primary_key=True,
     )
+
     summary = Column(Text, nullable=False)
-    updated_at = Column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
-
-    session = relationship("ChatSession", back_populates="memorySummery")
-
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class SidebarMenu(Base):
     __tablename__ = "sidebar_menus"

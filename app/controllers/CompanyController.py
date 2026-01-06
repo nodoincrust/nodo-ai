@@ -10,7 +10,7 @@ from app.schemas import (
     UpdateEmployeeSchema,
     UpdateEmployeeStatusSchema,
     getDepartments,
-    GetEmployee,
+    GetEmployee,getDepartmentList,GetEmployeeList
 )
 from app.services.Companyservice import (
     add_dept_service,
@@ -23,7 +23,7 @@ from app.services.Companyservice import (
     update_employee_service,
     delete_employee_details,
     updateStatusEmployee,
-    get_employee_list,
+    get_employee_list,get_list_department,get_all_employees
 )
 
 router = APIRouter(prefix="/nodo/company")
@@ -65,6 +65,14 @@ def list_departments(
         search=payload.search,
     )
 
+@router.post("/getDepartmentList")
+def get_list_departments(
+    payload:getDepartmentList,
+    current_user=Depends(get_current_user),
+    db:Session=Depends(get_db)
+):
+    company_admin_guard(current_user)
+    return get_list_department(db,current_user,search=payload.search)
 
 @router.put("/updateDepartment/{deptId}")
 def update_department(
@@ -113,7 +121,7 @@ def search_departments(
 # -------------------- EMPLOYEES --------------------
 
 
-@router.post("/employees")
+@router.post("/addEmployee")
 def add_employee(
     payload: CreateEmployeeSchema,
     current_user=Depends(get_current_user),
@@ -123,7 +131,7 @@ def add_employee(
     return add_employee_service(payload, db, current_user)
 
 
-@router.put("/employees/{employee_id}")
+@router.put("/updateEmployee/{employee_id}")
 def update_employee(
     employee_id: int,
     payload: UpdateEmployeeSchema,
@@ -169,3 +177,11 @@ def list_employees(
         size=payload.pagelimit,
         query=payload.search,
     )
+@router.post("/getEmployeeList")
+def get_list_employees(
+    payload:GetEmployeeList,
+    current_user=Depends(get_current_user),
+    db:Session=Depends(get_db)
+):
+    employee_manage_guard(current_user)
+    return get_all_employees(db,current_user,query=payload.search)

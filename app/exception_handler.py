@@ -24,11 +24,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-async def route_not_found_handler(request: Request, exc):
-    return JSONResponse(
-        status_code=404,
-        content={
-            "statusCode": 404,
-            "message": f"Route not found",
-        },
-    )
+# async def route_not_found_handler(request: Request, exc):
+#     return JSONResponse(
+#         status_code=404,
+#         content={
+#             "statusCode": 404,
+#             "message": f"Route not found",
+#         },
+#     )

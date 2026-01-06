@@ -1,116 +1,107 @@
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
 import os
-import uuid
 
-from app.helpers import get_db
+from app.helpers import get_db, get_current_user
+from app.schemas import DocumentSaveSchema
+
 from app.services.document_service import (
-    create_document_draft,
-    save_document_draft,
-    process_document,
-    assign_document,
+    processDocument,
+    createDocumentDraft,
+    saveDocument,
+    get_document_full_details,
 )
-from app.models import Document
-from app.helpers import get_current_user
-from app.schemas import DocumentSaveSchema, DocumentAssignSchema
 
 router = APIRouter(prefix="/nodo/newdocuments", tags=["Documents"])
 
 
 @router.get("/")
 def greet():
-    return "Hello Dept"
+    return {"status": "ok"}
 
 
 @router.post("/upload")
-async def upload_document(
+async def uploadDocument(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    currentUser=Depends(get_current_user),
 ):
-    temp_path = None
+    suffix = os.path.splitext(file.filename)[1] or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tempPath = tmp.name
 
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            temp_path = tmp.name
+    if os.path.getsize(tempPath) == 0:
+        os.remove(tempPath)
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-        if os.path.getsize(temp_path) == 0:
-            raise HTTPException(400, "Uploaded file is empty")
+    fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
 
-        document_id = str(uuid.uuid4())
-        file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
-
-        ai_result = process_document(
-            file_path=temp_path,
-            document_id=document_id,
-            filename=file.filename,
-            session_id=None,
-            file_type=file.content_type,
-            file_size_mb=file_size_mb,
-        )
-
-        #  create business draft
-        business_document_id = create_document_draft(
-            db=db,
-            ai_document_id=document_id,
-            temp_file_path=temp_path,
-            original_filename=file.filename,
-            department_id=current_user.get("department_id"),
-            current_user=current_user,
-        )
-
-        return {
-            "status": "success",
-            "document_id": business_document_id,
-            "ai_document_id": document_id,
-            "chunks": ai_result.get("chunks"),
-            "ocr_used": ai_result.get("ocr_used"),
-            "file_size_mb": round(file_size_mb, 2),
-        }
-
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
-
-
-@router.put("/{document_id}/metadata")
-def save_document_metadata(
-    document_id: int,
-    payload: DocumentSaveSchema,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    document = (
-        db.query(Document)
-        .filter(
-            Document.id == document_id,
-            Document.uploaded_by == current_user["user_id"],
-            Document.is_delete.is_(False),
-        )
-        .first()
+    result = createDocumentDraft(
+        db=db,
+        tempFilePath=tempPath,
+        originalFilename=file.filename,
+        departmentId=currentUser.get("department_id"),
+        currentUser=currentUser,
     )
 
-    if not document:
-        raise HTTPException(404, "Document not found")
+    businessDocumentId = result["document_id"]
+    permanentPath = result["file_path"]
 
-    if document.status != "DRAFT":
-        raise HTTPException(
-            400,
-            f"Metadata can only be edited in DRAFT state. Current status: {document.status}",
+    try:
+        aiResult = processDocument(
+            filePath=permanentPath,
+            documentId=businessDocumentId,
+            filename=file.filename,
+            fileType=file.content_type,
+            fileSizeMb=fileSizeMb,
         )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="AI processing failed")
 
-    result = save_document_draft(
+    return {
+        "status": "success",
+        "documentId": businessDocumentId,
+        "chunks": aiResult.get("chunks"),
+        "ocrUsed": aiResult.get("ocr_used"),
+        "fileSizeMb": round(fileSizeMb, 2),
+    }
+
+
+@router.post("/{documentId}/save")
+def saveDocumentApi(
+    documentId: int,
+    payload: DocumentSaveSchema,
+    db: Session = Depends(get_db),
+    currentUser=Depends(get_current_user),
+):
+    result = saveDocument(
         db=db,
-        document_id=document_id,
+        documentId=documentId,
         payload=payload,
-        current_user=current_user,
+        currentUser=currentUser,
     )
 
     return {
         "status": "success",
         "message": "Draft metadata saved",
         "data": result,
+    }
+
+
+@router.get("/{document_id}/details")
+def get_document_details(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return {
+        "statusCode": 200,
+        "data": get_document_full_details(
+            db=db,
+            document_id=document_id,
+            current_user=current_user,
+        ),
     }

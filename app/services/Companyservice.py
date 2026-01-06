@@ -129,6 +129,52 @@ def get_dept_list(
     }
 
 
+def get_list_department(db:Session,current_user:dict,search: str | None = None):
+    
+    base_query = (
+        db.query(Department)
+        .options(joinedload(Department.head))
+        .outerjoin(User, Department.head_user_id == User.id)
+        .filter(
+            Department.company_id == current_user["company_id"],
+            Department.is_delete.is_(False),
+        )
+    )
+    if search:
+        search_term = f"%{search.strip().lower()}%"
+        base_query = base_query.filter(
+            or_(
+                func.lower(Department.name).like(search_term),
+                func.lower(User.email).like(search_term),
+            )
+        )
+
+    total = base_query.count()
+    departments = (
+        base_query.order_by(Department.created_at.desc())
+        .all()
+    )
+    
+    return {
+        "statusCode": 200,
+        "message": (
+            "Departments fetched successfully" if total else "No departments found"
+        ),
+        "total": total,
+        "data": [
+            {
+                "id": d.id,
+                "company_id": d.company_id,
+                "name": d.name,
+                "description": d.description,
+                "head_user_id": d.head_user_id,
+                "head_name": d.head.name if d.head else None,
+                "is_active": d.is_active,
+                "created_at": d.created_at,
+            }
+            for d in departments
+        ],
+    }
 def updateStatusDept(deptId: int, is_active: bool, db: Session, current_user: dict):
 
     department = (
@@ -341,7 +387,7 @@ def add_employee_service(payload, db: Session, current_user: dict):
             reports_to=payload.reports_to,
             designation=payload.designation,
             role=UserRole.EMPLOYEE,
-            is_active=True,
+            is_active=payload.is_active,
         )
 
         db.add(user)
@@ -349,7 +395,7 @@ def add_employee_service(payload, db: Session, current_user: dict):
         db.refresh(user)
 
         return {
-            "statusCode": 201,
+            "statusCode": 200,
             "message": "Employee added successfully",
             "data": {"user_id": user.id, "department_id": user.department_id},
         }
@@ -366,6 +412,8 @@ def update_employee_service(
 
     if payload.name is not None:
         employee.name = payload.name
+    if payload.is_active is not None:
+        employee.is_active=payload.is_active
 
     if payload.email is not None:
         email_exists = (
@@ -497,18 +545,23 @@ def get_employee_list(
     size = max(size, 1)
     offset = (page - 1) * size
 
-    base_query = db.query(
-        User.id,
-        User.name,
-        User.email,
-        User.is_active,
-        User.department_id,
-        User.designation,
-    ).filter(
-        User.company_id == current_user["company_id"],
-        User.is_delete.is_(False),
-        User.role == UserRole.EMPLOYEE,
-        User.id != current_user["user_id"],
+    base_query = (
+        db.query(
+            User.id,
+            User.name,
+            User.email,
+            User.is_active,
+            User.department_id,
+            User.designation,
+            Department.name.label("department_name"),
+        )
+        .join(Department, Department.id == User.department_id)
+        .filter(
+            User.company_id == current_user["company_id"],
+            User.is_delete.is_(False),
+            User.role == UserRole.EMPLOYEE,
+            User.id != current_user["user_id"],
+        )
     )
 
     if current_user.get("is_department_head"):
@@ -546,7 +599,58 @@ def get_employee_list(
                 "email": e.email,
                 "is_active": e.is_active,
                 "department_id": e.department_id,
+                "department_name":e.department_name,
                 "role": e.designation,
+            }
+            for e in employees
+        ],
+    }
+
+
+def get_all_employees(db:Session,current_user:dict,query: str | None = None):
+    
+    base_query = db.query(
+        User.id,
+        User.name,
+        User.email,
+    ).filter(
+        User.company_id == current_user["company_id"],
+        User.is_delete.is_(False),
+        User.role == UserRole.EMPLOYEE,
+        User.id != current_user["user_id"],
+    )
+
+    if current_user.get("is_department_head"):
+        base_query = base_query.filter(
+            User.department_id == current_user["department_id"]
+        )
+
+    if query:
+        query = query.strip()
+        if query:
+            search = f"%{query}%"
+            base_query = base_query.filter(
+                or_(
+                    User.name.ilike(search),
+                    User.email.ilike(search),
+                )
+            )
+
+    total = base_query.order_by(None).count()
+
+    employees = (
+        base_query.order_by(User.created_at.desc()).all()
+    )
+
+    return {
+        "statusCode": 200,
+        "message": "Employees fetched successfully" if total else "No employees found",
+        "total": total,
+        "data": [
+            {
+                "id": e.id,
+                "name": e.name,
+                "email": e.email,
             }
             for e in employees
         ],

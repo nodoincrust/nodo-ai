@@ -1,27 +1,44 @@
 from typing import Generator, Optional
 
-from app.services.chat_service import chat_with_session, chat_stream
-from app.services.summary_service import summarize_doc
-from app.services.chat_service import chat_with_session
+from app.services.chat_service import chatWithDocument
+from app.services.summary_service import summarizeDocument
+from app.services.ai_DBservice import getOrCreateSessionForDocument
 
 
-def handle_chat(session_id: str, query: str) -> dict:
+def handleChat(*, documentId: int, query: str) -> dict:
+    """
+    Handle a chat request for a document.
+    """
+    sessionId = getOrCreateSessionForDocument(documentId)
 
-    return chat_with_session(session_id, query)
+    return chatWithDocument(
+        documentId=documentId,
+        sessionId=sessionId,
+        query=query,
+    )
 
 
-def handle_chat_stream(session_id: str, query: str) -> Generator[str, None, None]:
+def handleChatStream(*, documentId: int, query: str) -> Generator[str, None, None]:
+    
+    sessionId = getOrCreateSessionForDocument(documentId)
 
-    return chat_stream(session_id, query)
+    # Placeholder: implement streaming version later if needed
+    raise NotImplementedError("Streaming chat is not implemented yet")
 
 
-def handle_chat_with_citation(
-    session_id: str, query: str, document_id: Optional[str] = None
+def handleChatWithCitation(
+    *,
+    documentId: int,
+    query: str,
 ) -> dict:
+    sessionId = getOrCreateSessionForDocument(documentId)
 
-    return chat_with_session(session_id, query, document_id)
+    return chatWithDocument(
+        documentId=documentId,
+        sessionId=sessionId,
+        query=query,
+    )
 
 
-def handle_summary(document_id: str) -> dict:
-
-    return summarize_doc(document_id)
+def handleSummary(*, documentId: int) -> dict:
+    return summarizeDocument(documentId)

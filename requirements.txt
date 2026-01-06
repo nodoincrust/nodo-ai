@@ -1,10 +1,10 @@
-
-pip install fastapi uvicorn
+pip install fastapi uvicorn pandas numpy
 pip install sqlalchemy psycopg2-binary
 python-jose passlib email-validator
 
 pip install fastapi uvicorn sqlalchemy psycopg2-binary pgvector
-pip install pydantic python-multipart requests redis
-pip install duckduckgo-search
+pip install pydantic python-multipart requests redis spacy
+pip install duckduckgo-search python-docx openpyxl xlrd requests python-dotenv
 
-python -m pip install pymupdf pytesseract pillow pdf2image
+python -m pip install pymupdf pytesseract pillow pdf2image 
+python -m spacy download en_core_web_sm

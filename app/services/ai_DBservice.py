@@ -5,191 +5,213 @@ import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.db import SessionLocal, engine, Base
+from app.db import SessionLocal
 from app.models import (
     AIDocument,
-    DocuementChunks,
-    DocuemntSummery,
+    DocumentChunk,
+    DocumentSummary,
     ChatSession,
-    SessionMessages,
-    SessionMemorySummery,
-    DocuemntSummery,
+    SessionMessage,
+    SessionMemorySummary,
 )
 
 
-def create_document(
-    self,
-    document_id: str,
-    filename: str,
-    file_type: str,
-    file_size_mb: float,
-    session_id: Optional[str] = None,
-) -> AIDocument:
-    doc = AIDocument(
-        document_id=document_id,
-        session_id=session_id,
-        filename=filename,
-        file_type=file_type,
-        file_size_mb=file_size_mb,
-    )
-    print(session_id)
-    self.db.merge(doc)
-    self.db.commit()
-    return doc
+def getOrCreateSessionForDocument(documentId: int) -> str:
+    db: Session = SessionLocal()
+    try:
+        ai_doc = (
+            db.query(AIDocument)
+            .filter(AIDocument.document_id == documentId)
+            .first()
+        )
 
+        if not ai_doc:
+            raise ValueError(
+                f"AIDocument does not exist for documentId={documentId}"
+            )
 
-def store_chunk(
-    self,
-    document_id: str,
-    chunk_text: str,
+        # ✅ SESSION ALREADY EXISTS
+        if ai_doc.session_id:
+            return str(ai_doc.session_id)
+
+        # 🔥 CREATE SESSION
+        session = ChatSession()
+        db.add(session)
+        db.flush()  # generates UUID
+
+        # 🔗 LINK SESSION → DOCUMENT
+        ai_doc.session_id = session.session_id
+        db.commit()
+
+        return str(session.session_id)
+
+    finally:
+        db.close()
+
+# ======================================================
+# DOCUMENT CHUNKS
+# ======================================================
+
+def storeDocumentChunk(
+    db: Session,
+    *,
+    documentId: int,
+    sessionId: Optional[str],
+    chunkText: str,
     embedding: List[float],
-    chunk_index: int,
-    session_id: Optional[str] = None,
-):
-    chunk = DocuementChunks(
-        id=uuid.uuid4(),
-        document_id=document_id,
-        session_id=session_id,
-        chunk_text=chunk_text,
-        embedding=embedding,
-        chunk_index=chunk_index,
+    chunkIndex: int,
+    pageNumber: Optional[int] = None,
+) -> None:
+    db.add(
+        DocumentChunk(
+            id=uuid.uuid4(),
+            document_id=documentId,
+            session_id=sessionId,
+            chunk_text=chunkText,
+            embedding=embedding,
+            chunk_index=chunkIndex,
+            page_number=pageNumber,
+        )
     )
-    self.db.add(chunk)
 
 
-def fetch_chunks(self, document_id: str) -> List[str]:
+def fetchDocumentChunks(
+    db: Session,
+    *,
+    documentId: int,
+) -> List[str]:
     rows = (
-        self.db.query(DocuementChunks.chunk_text)
-        .filter(DocuementChunks.document_id == document_id)
-        .order_by(DocuementChunks.chunk_index)
+        db.query(DocumentChunk.chunk_text)
+        .filter(DocumentChunk.document_id == documentId)
+        .order_by(DocumentChunk.chunk_index)
         .all()
     )
-    return [r.chunk_text for r in rows]
+    return [row.chunk_text for row in rows]
 
 
-def semantic_search(
-    self,
-    document_id: str,
-    query_embedding: List[float],
+def semanticSearchChunks(
+    db: Session,
+    *,
+    documentId: int,
+    queryEmbedding: List[float],
     limit: int = 5,
-    session_id: Optional[str] = None,
-) -> List[DocuementChunks]:
-    q = self.db.query(DocuementChunks).filter(
-        DocuementChunks.document_id == document_id
-    )
-
-    if session_id:
-        q = q.filter(DocuementChunks.session_id == session_id)
-
+) -> List[DocumentChunk]:
     return (
-        q.order_by(DocuementChunks.embedding.l2_distance(query_embedding))
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == documentId)
+        .order_by(DocumentChunk.embedding.l2_distance(queryEmbedding))
         .limit(limit)
         .all()
     )
 
-
+# ======================================================
 # DOCUMENT SUMMARY
-def upsert_document_summary(self, document_id: str, summary_text: str):
-    self.db.merge(
-        DocuemntSummery(
-            document_id=document_id,
-            summery_text=summary_text,
-            updated_at=datetime.now(timezone.utc),
+# ======================================================
+
+def upsertDocumentSummary(
+    db: Session,
+    *,
+    documentId: int,
+    summaryText: str,
+) -> None:
+    existing = (
+        db.query(DocumentSummary)
+        .filter(DocumentSummary.document_id == documentId)
+        .first()
+    )
+
+    if existing:
+        existing.summary_text = summaryText
+        existing.updated_at = datetime.now(timezone.utc)
+    else:
+        db.add(
+            DocumentSummary(
+                document_id=documentId,
+                summary_text=summaryText,
+            )
         )
-    )
-    self.db.commit()
 
-
-def get_document_summary(self, document_id: str) -> Optional[str]:
-    res = self.db.query(DocuemntSummery).filter_by(document_id=document_id).first()
-    return res.summery_text if res else None
-
-
-# SESSION OPERATIONS
-
-
-def create_chat_session(db: Session = None) -> str:
-    sess = ChatSession()
-    db.add(sess)
     db.commit()
-    db.refresh(sess)
-    return str(sess.session_id)
 
 
-def session_exists(self, session_id: str) -> bool:
-    return (
-        self.db.query(ChatSession).filter(ChatSession.session_id == session_id).count()
-        > 0
+def getDocumentSummary(
+    db: Session,
+    *,
+    documentId: int,
+) -> Optional[str]:
+    summary = (
+        db.query(DocumentSummary)
+        .filter(DocumentSummary.document_id == documentId)
+        .first()
     )
+    return summary.summary_text if summary else None
 
+# ======================================================
+# SESSION MESSAGES
+# ======================================================
 
-# MESSAGE OPERATIONS
-def add_message(self, session_id: str, role: str, content: str):
-    self.db.add(
-        SessionMessages(
+def addSessionMessage(
+    db: Session,
+    *,
+    sessionId: str,
+    role: str,
+    content: str,
+) -> None:
+    db.add(
+        SessionMessage(
             id=uuid.uuid4(),
-            session_id=session_id,
+            session_id=sessionId,
             role=role,
             content=content,
         )
     )
-    self.db.query(ChatSession).filter_by(session_id=session_id).update(
+
+    db.query(ChatSession).filter_by(session_id=sessionId).update(
         {"last_active": datetime.now(timezone.utc)}
     )
 
 
-def get_recent_messages(
-    self, session_id: str, limit: int = 10
+def getRecentMessages(
+    db: Session,
+    *,
+    sessionId: str,
+    limit: int = 10,
 ) -> List[Tuple[str, str]]:
     return (
-        self.db.query(SessionMessages.role, SessionMessages.content)
-        .filter_by(session_id=session_id)
-        .order_by(SessionMessages.created_at.asc())
+        db.query(SessionMessage.role, SessionMessage.content)
+        .filter_by(session_id=sessionId)
+        .order_by(SessionMessage.created_at.asc())
         .limit(limit)
         .all()
     )
 
 
-def get_message_count(self, session_id: str) -> int:
+def getMessageCount(
+    db: Session,
+    *,
+    sessionId: str,
+) -> int:
     return (
-        self.db.query(func.count(SessionMessages.id))
-        .filter_by(session_id=session_id)
+        db.query(func.count(SessionMessage.id))
+        .filter_by(session_id=sessionId)
         .scalar()
     )
 
+# ======================================================
+# SESSION MEMORY
+# ======================================================
 
-def get_messages_for_compression(
-    self, session_id: str, keep_last: int = 10
-) -> Tuple[List[SessionMessages], List[SessionMessages]]:
-    msgs = (
-        self.db.query(SessionMessages)
-        .filter_by(session_id=session_id)
-        .order_by(SessionMessages.created_at.asc())
-        .all()
-    )
-    if len(msgs) <= keep_last:
-        return [], msgs
-    return msgs[:-keep_last], msgs[-keep_last:]
-
-
-def delete_messages(self, session_id: str, message_ids: List[uuid.UUID]):
-    if not message_ids:
-        return
-    (
-        self.db.query(SessionMessages)
-        .filter(
-            SessionMessages.session_id == session_id,
-            SessionMessages.id.in_(message_ids),
-        )
-        .delete(synchronize_session=False)
-    )
-
-
-def upsert_session_memory_summary(self, session_id: str, summary_text: str):
-    self.db.merge(
-        SessionMemorySummery(
-            session_id=session_id,
-            summary=summary_text,
+def upsertSessionMemory(
+    db: Session,
+    *,
+    sessionId: str,
+    summaryText: str,
+) -> None:
+    db.merge(
+        SessionMemorySummary(
+            session_id=sessionId,
+            summary=summaryText,
             updated_at=datetime.now(timezone.utc),
         )
     )
+    db.commit()

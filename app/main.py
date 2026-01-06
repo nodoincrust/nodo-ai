@@ -4,6 +4,8 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
 from app.controllers.Admincontroller import router as parentRoute
 from app.controllers.CompanyController import router as deptRoute
 from app.controllers.DocumentController import router as deptroute
@@ -16,7 +18,7 @@ from app.controllers.ai_controller import router as ai_router
 from app.exception_handler import (
     http_exception_handler,
     validation_exception_handler,
-    route_not_found_handler,
+    # route_not_found_handler,
 )
 
 app = FastAPI()
@@ -36,8 +38,14 @@ app.include_router(empRoute)
 
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(404, route_not_found_handler)
+# app.add_exception_handler(404, route_not_found_handler)
 
+
+app.mount(
+    "/storage",
+    StaticFiles(directory="storage"),
+    name="storage",
+)
 
 @app.get("/")
 def greet():

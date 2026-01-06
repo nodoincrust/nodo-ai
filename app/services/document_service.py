@@ -1,92 +1,128 @@
 import uuid
-from typing import Optional
-from sqlalchemy.orm import Session
-from fastapi import HTTPException
-from app.db import SessionLocal
+import logging
 import shutil
 import os
+from typing import Dict
+from sqlalchemy.orm import Session
+from fastapi import HTTPException
+
+from app.db import SessionLocal
 from app.models import (
+    Document,
     AIDocument,
-    DocuementChunks,
+    ChatSession,
+    DocumentChunk,
     DocumentVersion,
     DocumentReview,
-    Document,
     Company,
-    DocumentApprovalStep,
+    DocumentSummary,
 )
-from app.AIhelpers.pdf_helper import extract_pdf_text
-from app.AIhelpers.chunk_helper import chunk_text
-from app.AIhelpers.embedding_helper import create_embedding
+from app.AIhelpers.chunk_helper import chunkText
+from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
-from app.helpers import resolve_hierarchy
 
 BASE_STORAGE_PATH = "storage"
+logger = logging.getLogger(__name__)
+
+MAX_UPLOAD_MB = 50
+CHUNK_BATCH_SIZE = 32
 
 
-def process_document(
-    file_path: str,
-    document_id: str,
+def processDocument(
+    *,
+    filePath: str,
+    documentId: int,
     filename: str,
-    session_id: Optional[str],
-    file_type: str,
-    file_size_mb: float,
-) -> dict:
-    """Full document ingestion pipeline"""
-    db: Session = SessionLocal()
-    try:
-        doc = AIDocument(
-            document_id=document_id,
-            session_id=session_id,
-            filename=filename,
-            file_type=file_type,
-            file_size_mb=file_size_mb,
+    fileType: str,
+    fileSizeMb: float,
+) -> Dict:
+    """
+    AI ingestion pipeline.
+
+    🔒 GUARANTEES:
+    - Session is created BEFORE AIDocument
+    - ai_documents.session_id is NEVER NULL
+    - One document → one session
+    """
+
+    if not isinstance(documentId, int):
+        raise TypeError(
+            f"documentId must be int, got {type(documentId)} → {documentId}"
         )
-        db.add(doc)
-        db.commit()
 
-        text, ocr_used = extract_pdf_text(file_path)
+    db: Session = SessionLocal()
+    chunksCreated = 0
+    ocrUsed = False
 
-        chunks = chunk_text(text)
+    try:
 
-        objects = []
-        for idx, chunk in enumerate(chunks):
-            emb = create_embedding(chunk)
-            objects.append(
-                DocuementChunks(
-                    id=uuid.uuid4(),
-                    document_id=document_id,
-                    session_id=session_id,
-                    chunk_index=idx,
-                    chunk_text=chunk,
-                    embedding=emb,
-                )
+        session = ChatSession()
+        db.add(session)
+        db.flush()  # generates UUID
+
+        aiDocument = (
+            db.query(AIDocument).filter(AIDocument.document_id == documentId).first()
+        )
+
+        if not aiDocument:
+            aiDocument = AIDocument(
+                document_id=documentId,
+                session_id=session.session_id,
+                filename=filename,
+                file_type=fileType,
+                file_size_mb=fileSizeMb,
             )
+            db.add(aiDocument)
+            db.commit()
+        else:
+            session.session_id = aiDocument.session_id
 
-        db.bulk_save_objects(objects)
+        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
+            if not rawText or not rawText.strip():
+                continue
+
+            ocrUsed = ocrUsed or usedOcr
+
+            for chunk in chunkText(rawText):
+                db.add(
+                    DocumentChunk(
+                        id=uuid.uuid4(),
+                        ai_document_id=aiDocument.id,
+                        session_id=aiDocument.session_id,
+                        chunk_index=chunksCreated,
+                        chunk_text=chunk,
+                        page_number=pageNumber,
+                    )
+                )
+                chunksCreated += 1
+
         db.commit()
 
         return {
-            "status": "success",
-            "chunks": len(chunks),
-            "ocr_used": ocr_used,
-            "document_id": document_id,
+            "chunks": chunksCreated,
+            "ocr_used": ocrUsed,
         }
+
+    except Exception:
+        db.rollback()
+        logger.exception("Document ingestion failed")
+        raise
 
     finally:
         db.close()
 
 
-def save_document_draft(
+def saveDocument(
     db: Session,
-    document_id: int,
+    *,
+    documentId: int,
     payload: DocumentSaveSchema,
-    current_user: dict,
+    currentUser: dict,
 ):
     document = (
         db.query(Document)
         .filter(
-            Document.id == document_id,
-            Document.uploaded_by == current_user["user_id"],
+            Document.id == documentId,
             Document.is_delete.is_(False),
         )
         .first()
@@ -94,6 +130,9 @@ def save_document_draft(
 
     if not document:
         raise HTTPException(404, "Document not found")
+
+    if document.uploaded_by != currentUser["user_id"]:
+        raise HTTPException(403, "Permission denied")
 
     if document.status != "DRAFT":
         raise HTTPException(400, "Only draft documents can be edited")
@@ -114,29 +153,37 @@ def save_document_draft(
     if payload.tags is not None:
         version.tags = payload.tags
 
+    document.status = "SUBMITTED"
+
+    review = DocumentReview(
+        document_id=document.id,
+        reviewed_by=None,
+        status="PENDING",
+    )
+
+    db.add(review)
     db.commit()
 
     return {
-        "document_id": document.id,
+        "documentId": document.id,
         "status": document.status,
         "summary": version.summary,
         "tags": version.tags,
     }
 
 
-def create_document_draft(
+def createDocumentDraft(
     db: Session,
     *,
-    ai_document_id: str,
-    temp_file_path: str,
-    original_filename: str,
-    department_id: int,
-    current_user: dict,
+    tempFilePath: str,
+    originalFilename: str,
+    departmentId: int,
+    currentUser: dict,
 ):
     company = (
         db.query(Company)
         .filter(
-            Company.id == current_user["company_id"],
+            Company.id == currentUser["company_id"],
             Company.is_delete.is_(False),
         )
         .first()
@@ -147,116 +194,136 @@ def create_document_draft(
 
     document = Document(
         company_id=company.id,
-        department_id=department_id,
-        uploaded_by=current_user["user_id"],
+        department_id=departmentId,
+        uploaded_by=currentUser["user_id"],
         status="DRAFT",
     )
     db.add(document)
     db.flush()
 
-    doc_dir = os.path.join(
+    docDir = os.path.join(
         BASE_STORAGE_PATH,
         "companies",
         str(company.id),
         "documents",
         str(document.id),
     )
-    os.makedirs(doc_dir, exist_ok=True)
+    os.makedirs(docDir, exist_ok=True)
 
-    permanent_path = os.path.join(doc_dir, f"v1_{original_filename}")
+    permanentPath = os.path.join(
+        docDir,
+        f"v1_{originalFilename}",
+    )
 
-    shutil.move(temp_file_path, permanent_path)
-    document.current_file_path = permanent_path
+    shutil.move(tempFilePath, permanentPath)
 
-    file_size_bytes = os.path.getsize(permanent_path)
+    fileSizeBytes = os.path.getsize(permanentPath)
 
     version = DocumentVersion(
         document_id=document.id,
         version_number=1,
-        file_path=permanent_path,
-        file_name=original_filename,
-        file_size_bytes=file_size_bytes,
-        ai_document_id=ai_document_id,
-        created_by=current_user["user_id"],
+        file_path=permanentPath,
+        file_name=originalFilename,
+        file_size_bytes=fileSizeBytes,
+        ai_document_id=None,
+        created_by=currentUser["user_id"],
     )
+
     db.add(version)
-
-    company.remaining_space -= file_size_bytes
-
+    company.remaining_space -= fileSizeBytes
     db.commit()
 
-    return document.id
+    return {
+        "document_id": document.id,
+        "file_path": permanentPath,
+    }
 
 
-def assign_document(
+def get_document_full_details(
     db: Session,
+    *,
     document_id: int,
-    assign_level: str,
     current_user: dict,
 ):
+
     document = (
         db.query(Document)
         .filter(
             Document.id == document_id,
-            Document.uploaded_by == current_user["user_id"],
             Document.is_delete.is_(False),
+            Document.company_id == current_user["company_id"],
         )
         .first()
     )
 
     if not document:
-        raise HTTPException(404, "Document not found")
+        raise HTTPException(status_code=404, detail="Document not found")
 
-    dept_head, company_head = resolve_hierarchy(db, current_user)
+    version = (
+        db.query(DocumentVersion)
+        .filter(DocumentVersion.document_id == document.id)
+        .order_by(DocumentVersion.version_number.desc())
+        .first()
+    )
 
-    candidates: list[tuple[User, str]] = []
+    ai_document = (
+        db.query(AIDocument).filter(AIDocument.document_id == document.id).first()
+    )
 
-    if assign_level == "DEPARTMENT_HEAD":
-        if not dept_head:
-            raise HTTPException(400, "Department head not assigned")
-
-        candidates.append((dept_head, "DEPARTMENT_HEAD"))
-
-    elif assign_level == "COMPANY_ADMIN":
-        if not dept_head:
-            raise HTTPException(400, "Department head not assigned")
-        if not company_head:
-            raise HTTPException(400, "Company admin not found")
-
-        candidates.append((dept_head, "DEPARTMENT_HEAD"))
-        candidates.append((company_head, "COMPANY_ADMIN"))
-
-    else:
-        raise HTTPException(400, "Invalid assign level")
-
-    approval_chain: list[tuple[User, str]] = []
-    seen = set()
-
-    for user, approver_type in candidates:
-        if user.id not in seen:
-            approval_chain.append((user, approver_type))
-            seen.add(user.id)
-
-    if not approval_chain:
-        raise HTTPException(400, "No approvers found")
-
-    db.query(DocumentApprovalStep).filter(
-        DocumentApprovalStep.document_id == document.id
-    ).delete(synchronize_session=False)
-
-    for idx, (user, approver_type) in enumerate(approval_chain, start=1):
-        db.add(
-            DocumentApprovalStep(
-                document_id=document.id,
-                step_order=idx,
-                assigned_to=user.id,
-                approver_type=approver_type,
-            )
+    summary = None
+    if ai_document:
+        summary = (
+            db.query(DocumentSummary)
+            .filter(DocumentSummary.ai_document_id == ai_document.id)
+            .first()
         )
 
-    # Update document tracking
-    document.status = "IN_REVIEW"
-    document.current_step_order = 1
-    document.current_assignee_id = approval_chain[0][0].id
+    review = (
+        db.query(DocumentReview)
+        .filter(DocumentReview.document_id == document.id)
+        .order_by(DocumentReview.created_at.desc())
+        .first()
+    )
 
-    db.commit()
+    return {
+        "document": {
+            "id": document.id,
+            "status": document.status,
+            "is_active": document.is_active,
+            "created_at": document.created_at,
+            "current_version": document.current_version,
+            "uploaded_by": document.uploaded_by,
+            "department_id": document.department_id,
+            "company_id": document.company_id,
+        },
+       "file": {
+    "file_name": version.file_name if version else None,
+    "file_path": (
+        "/" + version.file_path.replace("\\", "/").lstrip("/")
+        if version
+        else None
+    ),
+    "file_size_bytes": version.file_size_bytes if version else None,
+    "version_number": version.version_number if version else None,
+}
+,
+        "ai": {
+            "ai_document_id": ai_document.id if ai_document else None,
+            "session_id": str(ai_document.session_id) if ai_document else None,
+            "file_type": ai_document.file_type if ai_document else None,
+            "file_size_mb": (
+                float(ai_document.file_size_mb)
+                if ai_document and ai_document.file_size_mb
+                else None
+            ),
+        },
+        "summary": {
+            "text": summary.summary_text if summary else None,
+            "tags": summary.tags if summary else [],
+            "citations": summary.citations if summary else [],
+        },
+        "review": {
+            "status": review.status if review else None,
+            "reviewed_by": review.reviewed_by if review else None,
+        },
+    }

@@ -4,7 +4,6 @@ import hashlib
 import json
 from typing import List, Dict
 
-
 REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 EMBED_URL = "http://localhost:11434/api/embeddings"
@@ -15,16 +14,18 @@ CACHE_TTL = 86400           # 24 hours
 MAX_BATCH_SIZE = 16         # HARD LIMIT
 
 
-def _hash_text(text: str) -> str:
+def hashText(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _cache_key(text: str) -> str:
-    return f"emb:{_hash_text(text)}"
+def getCacheKey(text: str) -> str:
+    return f"emb:{hashText(text)}"
 
 
-def create_embeddings(texts: List[str]) -> List[List[float]]:
-
+def createEmbeddings(texts: List[str]) -> List[List[float]]:
+    """
+    Create embeddings with Redis caching and batch safety.
+    """
     if not texts:
         return []
 
@@ -32,21 +33,21 @@ def create_embeddings(texts: List[str]) -> List[List[float]]:
     missing: List[Dict] = []
 
     pipe = REDIS.pipeline()
-    for t in texts:
-        pipe.get(_cache_key(t))
-    cached = pipe.execute()
+    for text in texts:
+        pipe.get(getCacheKey(text))
+    cachedResults = pipe.execute()
 
-    for i, cached_val in enumerate(cached):
-        if cached_val:
-            results[i] = json.loads(cached_val)
+    for index, cachedValue in enumerate(cachedResults):
+        if cachedValue:
+            results[index] = json.loads(cachedValue)
         else:
-            missing.append({"index": i, "text": texts[i]})
+            missing.append({"index": index, "text": texts[index]})
 
     if not missing:
         return results  # type: ignore
 
     for i in range(0, len(missing), MAX_BATCH_SIZE):
-        batch = missing[i:i + MAX_BATCH_SIZE]
+        batch = missing[i : i + MAX_BATCH_SIZE]
 
         payload = {
             "model": EMBED_MODEL,
@@ -54,26 +55,26 @@ def create_embeddings(texts: List[str]) -> List[List[float]]:
         }
 
         try:
-            res = requests.post(
+            response = requests.post(
                 EMBED_URL,
                 json=payload,
                 timeout=EMBED_TIMEOUT,
             )
-            res.raise_for_status()
-            vectors = res.json()["embeddings"]
+            response.raise_for_status()
+            vectors = response.json()["embeddings"]
 
-        except Exception as e:
-            # 🔥 FAIL SAFE: zero-vector fallback
-            dim = 768
-            vectors = [[0.0] * dim for _ in batch]
+        except Exception:
+            # 🔥 FAIL-SAFE: zero-vector fallback
+            dimension = 768
+            vectors = [[0.0] * dimension for _ in batch]
 
         for item, vector in zip(batch, vectors):
-            idx = item["index"]
+            index = item["index"]
             text = item["text"]
 
-            results[idx] = vector
+            results[index] = vector
             REDIS.setex(
-                _cache_key(text),
+                getCacheKey(text),
                 CACHE_TTL,
                 json.dumps(vector),
             )
@@ -81,5 +82,8 @@ def create_embeddings(texts: List[str]) -> List[List[float]]:
     return results  # type: ignore
 
 
-def create_embedding(text: str) -> List[float]:
-    return create_embeddings([text])[0]
+def createEmbedding(text: str) -> List[float]:
+    """
+    Convenience wrapper for single-text embedding.
+    """
+    return createEmbeddings([text])[0]

@@ -1,45 +1,54 @@
-from typing import List
+from typing import List, Iterable, Dict, Any
 
 
-def chunk_text(text: str, size: int = 500, overlap: int = 80) -> List[str]:
-    """
-    Split text into overlapping chunks for RAG
-    """
+def chunkText(
+    text: str,
+    chunkSize: int = 500,
+    overlap: int = 80,
+) -> List[str]:
     words = text.split()
-    chunks = []
-    start = 0
+    chunks: List[str] = []
+    startIndex = 0
 
-    while start < len(words):
-        chunks.append(" ".join(words[start : start + size]))
-        start += size - overlap
+    while startIndex < len(words):
+        endIndex = startIndex + chunkSize
+        chunks.append(" ".join(words[startIndex:endIndex]))
+        startIndex += chunkSize - overlap
 
     return chunks
 
 
-def chunk_text_from_pages(pages, size=512, overlap=60, with_page=False):
-    buffer = []
-    page_buffer = []
+def chunkTextFromPages(
+    pages: Iterable[Any],
+    chunkSize: int = 512,
+    overlap: int = 60,
+    includePageNumber: bool = False,
+) -> Iterable[Dict[str, Any]]:
+
+    wordBuffer: List[str] = []
+    pageBuffer: List[int] = []
 
     for item in pages:
-        if with_page:
-            page_no, text = item
+        if includePageNumber:
+            pageNumber, text = item
         else:
-            page_no, text = None, item
+            pageNumber, text = None, item
 
         words = text.split()
-        buffer.extend(words)
-        page_buffer.extend([page_no] * len(words))
+        wordBuffer.extend(words)
+        pageBuffer.extend([pageNumber] * len(words))
 
-        while len(buffer) >= size:
+        while len(wordBuffer) >= chunkSize:
             yield {
-                "text": " ".join(buffer[:size]),
-                "page": page_buffer[0]
+                "text": " ".join(wordBuffer[:chunkSize]),
+                "page": pageBuffer[0],
             }
-            buffer = buffer[size - overlap:]
-            page_buffer = page_buffer[size - overlap:]
 
-    if buffer:
+            wordBuffer = wordBuffer[chunkSize - overlap :]
+            pageBuffer = pageBuffer[chunkSize - overlap :]
+
+    if wordBuffer:
         yield {
-            "text": " ".join(buffer),
-            "page": page_buffer[0]
+            "text": " ".join(wordBuffer),
+            "page": pageBuffer[0],
         }

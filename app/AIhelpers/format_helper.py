@@ -4,113 +4,108 @@ import fitz
 import docx
 import pandas as pd
 from PIL import Image
+from typing import Iterator, Tuple
 
-# ✅ SAFE OCR (centralized, env-based)
 from app.ocr import safe_ocr
 
 
-def iter_file_pages(file_path: str):
+def iterateFilePages(filePath: str) -> Iterator[Tuple[int, str, bool]]:
     """
-    Yields: (page_number, text, ocr_used)
+    Yield (pageNumber, text, ocrUsed) for supported file types.
     """
-    ext = os.path.splitext(file_path)[1].lower()
+    extension = os.path.splitext(filePath)[1].lower()
 
-    if ext == ".pdf":
-        yield from extract_pdf(file_path)
-    elif ext == ".docx":
-        yield from extract_docx(file_path)
-    elif ext in [".xls", ".xlsx"]:
-        yield from extract_excel(file_path)
-    elif ext == ".csv":
-        yield from extract_csv(file_path)
-    elif ext == ".txt":
-        yield from extract_txt(file_path)
-    elif ext in [".png", ".jpg", ".jpeg"]:
-        yield from extract_image(file_path)
+    if extension == ".pdf":
+        yield from extractPdf(filePath)
+    elif extension == ".docx":
+        yield from extractDocx(filePath)
+    elif extension in [".xls", ".xlsx"]:
+        yield from extractExcel(filePath)
+    elif extension == ".csv":
+        yield from extractCsv(filePath)
+    elif extension == ".txt":
+        yield from extractTxt(filePath)
+    elif extension in [".png", ".jpg", ".jpeg"]:
+        yield from extractImage(filePath)
     else:
-        raise ValueError(f"Unsupported file type: {ext}")
+        raise ValueError(f"Unsupported file type: {extension}")
 
 
 # =========================
 # EXTRACTORS
 # =========================
 
-def extract_pdf(path):
-    doc = fitz.open(path)
+def extractPdf(path: str):
+    document = fitz.open(path)
 
-    for page_no, page in enumerate(doc, start=1):
+    for pageNumber, page in enumerate(document, start=1):
         text = page.get_text().strip()
 
         if text:
-            yield page_no, text, False
+            yield pageNumber, text, False
         else:
-            # OCR fallback (SAFE)
             pix = page.get_pixmap()
-            img = Image.frombytes(
+            image = Image.frombytes(
                 "RGB",
-                [pix.width, pix.height],
-                pix.samples
+                (pix.width, pix.height),
+                pix.samples,
             )
-            ocr_text = safe_ocr(img)
-            if ocr_text.strip():
-                yield page_no, ocr_text, True
+            ocrText = safe_ocr(image)
+            if ocrText.strip():
+                yield pageNumber, ocrText, True
 
 
-def extract_docx(path):
+def extractDocx(path: str):
     """
-    Generic DOCX extractor:
-    - Deduplicates repeated layout text
-    - Works for resumes, reports, tables, mixed content
+    Generic DOCX extractor with deduplication.
     """
-    d = docx.Document(path)
-
+    document = docx.Document(path)
     seen = set()
     lines = []
 
-    for p in d.paragraphs:
-        t = p.text.strip()
-        if not t:
+    for paragraph in document.paragraphs:
+        text = paragraph.text.strip()
+        if not text:
             continue
 
-        t = " ".join(t.split())
-        key = t.lower()
+        text = " ".join(text.split())
+        key = text.lower()
 
         if key in seen:
             continue
 
         seen.add(key)
-        lines.append(t)
+        lines.append(text)
 
     if lines:
         yield 1, "\n".join(lines), False
 
 
-def extract_excel(path):
+def extractExcel(path: str):
     sheets = pd.read_excel(path, sheet_name=None)
-    page = 1
+    pageNumber = 1
 
-    for sheet_name, df in sheets.items():
-        df = df.dropna(how="all")
-        if df.empty:
+    for sheetName, dataframe in sheets.items():
+        dataframe = dataframe.dropna(how="all")
+        if dataframe.empty:
             continue
 
         rows = []
-        for _, row in df.iterrows():
-            values = [str(v) for v in row if pd.notna(v)]
+        for _, row in dataframe.iterrows():
+            values = [str(value) for value in row if pd.notna(value)]
             if values:
                 rows.append(" | ".join(values))
 
         if rows:
-            text = f"[SHEET: {sheet_name}]\n" + "\n".join(rows)
-            yield page, text, False
-            page += 1
+            text = f"[SHEET: {sheetName}]\n" + "\n".join(rows)
+            yield pageNumber, text, False
+            pageNumber += 1
 
 
-def extract_csv(path):
+def extractCsv(path: str):
     rows = []
-
-    with open(path, encoding="utf-8", errors="ignore") as f:
-        reader = csv.reader(f)
+    with open(path, encoding="utf-8", errors="ignore") as file:
+        reader = csv.reader(file)
         for row in reader:
             if row:
                 rows.append(" | ".join(row))
@@ -119,18 +114,16 @@ def extract_csv(path):
         yield 1, "\n".join(rows), False
 
 
-def extract_txt(path):
-    with open(path, encoding="utf-8", errors="ignore") as f:
-        text = f.read().strip()
+def extractTxt(path: str):
+    with open(path, encoding="utf-8", errors="ignore") as file:
+        text = file.read().strip()
         if text:
             yield 1, text, False
 
 
-def extract_image(path):
-    img = Image.open(path)
-
-    # SAFE OCR — no crash if tesseract missing
-    text = safe_ocr(img)
+def extractImage(path: str):
+    image = Image.open(path)
+    text = safe_ocr(image)
 
     if text.strip():
         yield 1, text, True

@@ -1,10 +1,14 @@
-from typing import Optional, Generator, List
+from typing import Generator, List, Tuple
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models import SessionMessages, SessionMemorySummery, DocuementChunks
-from app.AIhelpers.embedding_helper import create_embedding
-from app.AIhelpers.llm_helper import ask_llm, ask_llm_stream
+from app.models import (
+    SessionMessage,
+    SessionMemorySummary,   # ✅ CORRECT MODEL
+    DocumentChunk,
+)
+from app.AIhelpers.embedding_helper import createEmbedding
+from app.AIhelpers.llm_helper import askLlm, askLlmStream
 
 # ==============================
 # CONFIG
@@ -14,86 +18,91 @@ TOP_K = 5
 MAX_HISTORY = 6
 
 
-def _load_context(db: Session, session_id: str) -> str:
+# ==============================
+# INTERNAL HELPERS
+# ==============================
 
+def loadContext(db: Session, sessionId: str) -> str:
+    """
+    Load recent chat history + compressed memory.
+    NO LLM calls here.
+    """
     memory = (
-        db.query(SessionMemorySummery)
-        .filter_by(session_id=session_id)
+        db.query(SessionMemorySummary)
+        .filter_by(session_id=sessionId)
         .first()
     )
 
     messages = (
-        db.query(SessionMessages)
-        .filter_by(session_id=session_id)
-        .order_by(SessionMessages.created_at.desc())
+        db.query(SessionMessage)
+        .filter_by(session_id=sessionId)
+        .order_by(SessionMessage.created_at.desc())
         .limit(MAX_HISTORY)
         .all()
     )
 
-    history = "\n".join(
+    historyText = "\n".join(
         f"{m.role.upper()}: {m.content}"
         for m in reversed(messages)
     )
 
     if memory and memory.summary:
-        return f"MEMORY:\n{memory.summary}\n\n{history}"
+        return f"MEMORY:\n{memory.summary}\n\n{historyText}"
 
-    return history
+    return historyText
 
 
-def _retrieve_document_context(
+def retrieveDocumentContext(
     db: Session,
     *,
+    documentId: int,
     query: str,
-    document_id: Optional[str],
-) -> tuple[str, list]:
+) -> Tuple[str, list]:
     """
     Semantic retrieval ONLY.
-    No LLM calls.
+    NO LLM calls.
     """
-    if not document_id:
-        return "", []
-
-    query_emb = create_embedding(query)
+    queryEmbedding = createEmbedding(query)
 
     chunks = (
-        db.query(DocuementChunks)
-        .filter(DocuementChunks.document_id == document_id)
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == documentId)
         .all()
     )
 
-    scored = []
-    for c in chunks:
-        if c.embedding:
-            score = sum(a * b for a, b in zip(query_emb, c.embedding))
-            scored.append((score, c))
+    scored: List[Tuple[float, DocumentChunk]] = []
+    for chunk in chunks:
+        if chunk.embedding:
+            score = sum(a * b for a, b in zip(queryEmbedding, chunk.embedding))
+            scored.append((score, chunk))
 
     scored.sort(reverse=True)
 
-    context = []
-    citations = []
+    contextParts: List[str] = []
+    citations: List[dict] = []
 
-    for _, c in scored[:TOP_K]:
-        context.append(c.chunk_text)
+    for _, chunk in scored[:TOP_K]:
+        contextParts.append(chunk.chunk_text)
         citations.append(
             {
-                "document_id": str(c.document_id),
-                "chunk_index": c.chunk_index,
-                "page_number": c.page_number,
+                "documentId": chunk.document_id,
+                "chunkIndex": chunk.chunk_index,
+                "pageNumber": chunk.page_number,
             }
         )
 
-    return "\n".join(context), citations
+    return "\n".join(contextParts), citations
 
 
 # ==============================
 # PUBLIC CHAT API
 # ==============================
 
-def chat_with_session(
-    session_id: str,
+def chatWithDocument(
+    *,
+    documentId: int,
+    sessionId: str,
     query: str,
-    document_id: Optional[str] = None,
 ) -> dict:
     """
     🔥 EXACTLY ONE LLM CALL HAPPENS HERE 🔥
@@ -102,8 +111,8 @@ def chat_with_session(
     try:
         # 1️⃣ Save user message
         db.add(
-            SessionMessages(
-                session_id=session_id,
+            SessionMessage(
+                session_id=sessionId,
                 role="user",
                 content=query,
             )
@@ -111,29 +120,29 @@ def chat_with_session(
         db.commit()
 
         # 2️⃣ Build context (NO LLM)
-        memory_context = _load_context(db, session_id)
-        doc_context, citations = _retrieve_document_context(
+        memoryContext = loadContext(db, sessionId)
+        documentContext, citations = retrieveDocumentContext(
             db,
+            documentId=documentId,
             query=query,
-            document_id=document_id,
         )
 
-        full_context = memory_context
-        if doc_context:
-            full_context += "\n\nDOCUMENT:\n" + doc_context
+        fullContext = memoryContext
+        if documentContext:
+            fullContext += "\n\nDOCUMENT:\n" + documentContext
 
         # 3️⃣ 🔥 SINGLE LLM CALL 🔥
-        llm_result = ask_llm(
-            context=full_context,
+        llmResult = askLlm(
+            context=fullContext,
             question=query,
         )
 
-        answer = llm_result["data"]["answer"]
+        answer = llmResult["data"]["answer"]
 
         # 4️⃣ Save assistant response
         db.add(
-            SessionMessages(
-                session_id=session_id,
+            SessionMessage(
+                session_id=sessionId,
                 role="assistant",
                 content=answer,
             )
@@ -149,8 +158,9 @@ def chat_with_session(
         db.close()
 
 
-def chat_stream(
-    session_id: str,
+def chatStream(
+    *,
+    sessionId: str,
     query: str,
 ) -> Generator[str, None, None]:
     """
@@ -160,26 +170,26 @@ def chat_stream(
     db = SessionLocal()
     try:
         db.add(
-            SessionMessages(
-                session_id=session_id,
+            SessionMessage(
+                session_id=sessionId,
                 role="user",
                 content=query,
             )
         )
         db.commit()
 
-        context = _load_context(db, session_id)
-        final_tokens: List[str] = []
+        context = loadContext(db, sessionId)
+        finalTokens: List[str] = []
 
-        for token in ask_llm_stream(context=context, question=query):
-            final_tokens.append(token)
+        for token in askLlmStream(context=context, question=query):
+            finalTokens.append(token)
             yield token
 
         db.add(
-            SessionMessages(
-                session_id=session_id,
+            SessionMessage(
+                session_id=sessionId,
                 role="assistant",
-                content="".join(final_tokens),
+                content="".join(finalTokens),
             )
         )
         db.commit()

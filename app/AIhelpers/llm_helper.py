@@ -1,7 +1,5 @@
 import requests
 import re
-import math
-from collections import Counter
 from typing import Iterable, List, Dict
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -10,6 +8,7 @@ MODEL = "llama3.1:latest"
 SYSTEM_PROMPT = """
 You are an enterprise-grade AI assistant operating inside a document-centric,
 memory-aware question answering system.
+
 CORE RULES:
 • Answer only from provided document context
 • Do NOT hallucinate or invent facts
@@ -36,26 +35,49 @@ Every response must be: Grounded, Accurate, and Trustworthy.
 """
 
 
-def ask_llm(context: str, question: str) -> dict:
+def cleanInputText(text: str) -> str:
+
+    return re.sub(r"[\x00-\x1F\x7F]", " ", text)
+
+
+def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
+    cleanedContext = cleanInputText(context)
+
     payload = {
         "model": MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": f"Context:\n{context}"},
+            {"role": "system", "content": f"Context:\n{cleanedContext}"},
             {"role": "user", "content": question},
         ],
-        "max_tokens": 400,
-        "temperature": 0.2,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 1000,
+        },
         "stream": False,
     }
 
-    res = requests.post(OLLAMA_URL, json=payload)  # timeout=120
-    res.raise_for_status()
+    try:
+        response = requests.post(OLLAMA_URL, json=payload)
+        response.raise_for_status()
 
-    return {"status": "success", "data": {"answer": res.json()["message"]["content"]}}
+        return {
+            "status": "success",
+            "data": {
+                "answer": response.json()["message"]["content"]
+            },
+        }
+
+    except Exception as exc:
+        return {
+            "status": "error",
+            "data": {
+                "answer": str(exc)
+            },
+        }
 
 
-def ask_llm_stream(context: str, question: str) -> Iterable[str]:
+def askLlmStream(*, context: str, question: str) -> Iterable[str]:
     payload = {
         "model": MODEL,
         "messages": [
@@ -66,40 +88,44 @@ def ask_llm_stream(context: str, question: str) -> Iterable[str]:
         "stream": True,
     }
 
-    with requests.post(OLLAMA_URL, json=payload, stream=True) as r:
-        for line in r.iter_lines():
+    with requests.post(OLLAMA_URL, json=payload, stream=True) as response:
+        for line in response.iter_lines():
             if not line:
                 continue
 
-            data = line.decode("utf-8")
-            if '"content":"' in data:
-                yield data.split('"content":"')[1].split('"')[0]
+            decoded = line.decode("utf-8")
+            if '"content":"' in decoded:
+                yield decoded.split('"content":"')[1].split('"')[0]
 
 
-def _split_into_sentences(text: str) -> List[str]:
-    text = text.strip()
-    # naive sentence tokenizer
-    sentences = re.split(r'(?<=[\.\?\!])\s+', text)
-    return [s.replace('\n', ' ').strip() for s in sentences if s.strip()]
-
+# =========================
+# OPTIONAL TEXT UTILITIES
+# =========================
 
 _STOPWORDS = {
-    'the', 'and', 'is', 'in', 'to', 'of', 'a', 'for', 'on', 'with', 'as', 'by',
-    'that', 'this', 'are', 'was', 'it', 'be', 'or', 'from', 'at', 'an', 'which'
+    "the", "and", "is", "in", "to", "of", "a", "for", "on", "with", "as", "by",
+    "that", "this", "are", "was", "it", "be", "or", "from", "at", "an", "which",
 }
 
 
-def _tokenize(text: str) -> List[str]:
+def tokenizeText(text: str) -> List[str]:
     tokens = re.findall(r"[A-Za-z]{2,}", text.lower())
-    return [t for t in tokens if t not in _STOPWORDS]
+    return [token for token in tokens if token not in _STOPWORDS]
 
-def _compress_sentence(s: str, max_chars: int = 200) -> str:
-    # keep the leading clause up to first comma/semicolon/dash/colon
-    for sep in [',', ';', ' - ', ' — ', ':']:
-        if sep in s:
-            s = s.split(sep)[0]
+
+def splitIntoSentences(text: str) -> List[str]:
+    sentences = re.split(r"(?<=[\.\?\!])\s+", text.strip())
+    return [s.replace("\n", " ").strip() for s in sentences if s.strip()]
+
+
+def compressSentence(sentence: str, maxChars: int = 200) -> str:
+    for separator in [",", ";", " - ", " — ", ":"]:
+        if separator in sentence:
+            sentence = sentence.split(separator)[0]
             break
-    s = ' '.join(s.split())
-    if len(s) > max_chars:
-        return s[: max_chars - 1].rstrip() + '…'
-    return s
+
+    sentence = " ".join(sentence.split())
+    if len(sentence) > maxChars:
+        return sentence[: maxChars - 1].rstrip() + "…"
+
+    return sentence

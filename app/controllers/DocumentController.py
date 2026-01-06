@@ -1,89 +1,85 @@
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
 import os
-import uuid
-import requests
 
-from app.helpers import get_db
-from app.services.document_service import create_document_draft,save_document,process_document
-
-from app.helpers import get_current_user
+from app.helpers import get_db, get_current_user
 from app.schemas import DocumentSaveSchema
+
+from app.services.document_service import (
+    processDocument,
+    createDocumentDraft,
+    saveDocument,
+)
 
 router = APIRouter(prefix="/newdocuments", tags=["Documents"])
 
 
 @router.get("/")
 def greet():
-    return "Hello Dept"
+    return {"status": "ok"}
 
 @router.post("/upload")
-async def upload_document(
+async def uploadDocument(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    currentUser=Depends(get_current_user),
 ):
-    temp_path = None
+    tempPath = None
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        # Save temp file
+        suffix = os.path.splitext(file.filename)[1] or ".pdf"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             shutil.copyfileobj(file.file, tmp)
-            temp_path = tmp.name
+            tempPath = tmp.name
 
-        if os.path.getsize(temp_path) == 0:
-            raise HTTPException(400, "Uploaded file is empty")
+        if os.path.getsize(tempPath) == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-        document_id = str(uuid.uuid4())
-        file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+        fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
 
-        ai_result = process_document(
-            file_path=temp_path,
-            document_id=document_id,
-            filename=file.filename,
-            session_id=None,
-            file_type=file.content_type,
-            file_size_mb=file_size_mb,
+        businessDocumentId = createDocumentDraft(
+            db=db,
+            tempFilePath=tempPath,
+            originalFilename=file.filename,
+            departmentId=currentUser.get("department_id"),
+            currentUser=currentUser,
         )
 
-        # ✅ create business draft
-        business_document_id = create_document_draft(
-            db=db,
-            ai_document_id=document_id,
-            temp_file_path=temp_path,
-            original_filename=file.filename,
-            department_id=current_user.get("department_id"),
-            current_user=current_user,
+        aiResult = processDocument(
+            filePath=tempPath,
+            documentId=businessDocumentId,
+            filename=file.filename,
+            fileType=file.content_type,
+            fileSizeMb=fileSizeMb,
         )
 
         return {
             "status": "success",
-            "document_id": business_document_id,
-            "ai_document_id": document_id,
-            "chunks": ai_result.get("chunks"),
-            "ocr_used": ai_result.get("ocr_used"),
-            "file_size_mb": round(file_size_mb, 2),
+            "documentId": businessDocumentId,
+            "chunks": aiResult.get("chunks"),
+            "ocrUsed": aiResult.get("ocr_used"),
+            "fileSizeMb": round(fileSizeMb, 2),
         }
 
     finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+        if tempPath and os.path.exists(tempPath):
+            os.remove(tempPath)
 
-
-
-@router.post("/{document_id}/save")
-def save_document_api(
-    document_id: int,
+@router.post("/{documentId}/save")
+def saveDocumentApi(
+    documentId: int,
     payload: DocumentSaveSchema,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    currentUser=Depends(get_current_user),
 ):
-    result = save_document(
+    result = saveDocument(
         db=db,
-        document_id=document_id,
+        documentId=documentId,
         payload=payload,
-        current_user=current_user,
+        currentUser=currentUser,
     )
 
     return {

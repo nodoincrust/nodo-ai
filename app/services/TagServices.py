@@ -1,33 +1,29 @@
-"""
-Tag Service (READ-ONLY)
-
-IMPORTANT:
-- NO LLM calls here
-- Tags are generated during summary creation
-- This service only fetches stored tags
-"""
-
 import logging
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.models import DocuemntSummery
 
-logger = logging.getLogger("ai_modul.tag_service")
+logger = logging.getLogger("ai.tagService")
 
 
-def get_tags(
+def getDocumentTags(
     db: Session,
-    document_id: str,
+    *,
+    documentId: int,
 ) -> List[str]:
+    """
+    Fetch stored tags for a document.
+    READ-ONLY service.
+    """
     record = (
         db.query(DocuemntSummery)
-        .filter_by(document_id=document_id)
+        .filter_by(document_id=documentId)
         .first()
     )
 
     if not record or not record.tags:
-        logger.info("No tags found for document %s", document_id)
+        logger.info("No tags found for document %s", documentId)
         return []
 
     return record.tags

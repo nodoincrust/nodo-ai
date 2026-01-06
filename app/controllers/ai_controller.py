@@ -1,110 +1,156 @@
-import uuid
 import shutil
 import os
 import tempfile
-from typing import Optional
-
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
-
-from app.services.document_service import process_document
-from app.services.chat_service import chat_with_session, chat_stream
-from app.services.summary_service import summarize_doc
-from app.services.ai_DBservice import create_chat_session
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException,
+    BackgroundTasks,
+    Form,
+)
+from app.db import SessionLocal
+from app.models import Document
+from app.services.document_service import processDocument
+from app.services.chat_service import chatWithDocument
+from app.services.summary_service import summarizeDocument
+from app.services.ai_DBservice import getOrCreateSessionForDocument
 
 ASYNC_THRESHOLD_MB = 2.0
 
 router = APIRouter(prefix="/ai")
 
+
+# ======================================================
+# UPLOAD DOCUMENT
+# ======================================================
 @router.post("/upload")
-async def upload_document(
-    background_tasks: BackgroundTasks,
+async def uploadDocument(
+    backgroundTasks: BackgroundTasks,
     file: UploadFile = File(...),
-    session_id: Optional[str] = Form(None),
 ):
-    #Create temp file (STREAM SAFE)
-    _, ext = os.path.splitext(file.filename or "")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # --------------------------------------------------
+    # 1️⃣ SAVE TEMP FILE
+    # --------------------------------------------------
+    _, extension = os.path.splitext(file.filename)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
         shutil.copyfileobj(file.file, tmp)
-        temp_path = tmp.name
+        tempPath = tmp.name
 
-    if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
-        raise HTTPException(400, "Empty upload")
+    if not os.path.exists(tempPath) or os.path.getsize(tempPath) == 0:
+        os.remove(tempPath)
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
-    document_id = str(uuid.uuid4())
+    fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
 
-    # 2️⃣ Async vs sync decision
-    if file_size_mb >= ASYNC_THRESHOLD_MB:
-        background_tasks.add_task(
-            process_document,
-            file_path=temp_path,
-            document_id=document_id,
-            filename=file.filename,
-            session_id=session_id,
-            file_type=file.content_type,
-            file_size_mb=file_size_mb,
-        )
-
-        return {
-            "status": "processing",
-            "document_id": document_id,
-            "file_size_mb": round(file_size_mb, 2),
-        }
-
-    #Small file → sync
+    db = SessionLocal()
     try:
-        result = process_document(
-            file_path=temp_path,
-            document_id=document_id,
-            filename=file.filename,
-            session_id=session_id,
-            file_type=file.content_type,
-            file_size_mb=file_size_mb,
+        document = Document(
+            company_id=3,        # ✅ DEFAULT
+            department_id=1,     # ✅ DEFAULT
+            uploaded_by=3,       # ✅ DEFAULT
+            status="DRAFT",
+            current_version=1,
+            is_active=True,
+            is_delete=False,
         )
+
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+
+        documentId = document.id  # ✅ SAFE INT
+
+        # --------------------------------------------------
+        # 3️⃣ PROCESS DOCUMENT
+        # --------------------------------------------------
+        if fileSizeMb >= ASYNC_THRESHOLD_MB:
+            backgroundTasks.add_task(
+                processDocument,
+                filePath=tempPath,
+                documentId=documentId,
+                filename=file.filename,
+                fileType=file.content_type,
+                fileSizeMb=fileSizeMb,
+            )
+
+            return {
+                "status": "processing",
+                "documentId": documentId,
+                "fileSizeMb": round(fileSizeMb, 2),
+            }
+
+        result = processDocument(
+            filePath=tempPath,
+            documentId=documentId,
+            filename=file.filename,
+            fileType=file.content_type,
+            fileSizeMb=fileSizeMb,
+        )
+        sessionId = getOrCreateSessionForDocument(documentId)
 
         return {
             "status": "success",
-            "document_id": document_id,
-            "chunks": result["chunks"],
-            "ocr_used": result["ocr_used"],
-            "file_size_mb": round(file_size_mb, 2),
+            "documentId": documentId,
+            "sessionId": sessionId, 
+            "chunks": result.get("chunks", 0),
+            "ocrUsed": result.get("ocr_used", False),
+            "fileSizeMb": round(fileSizeMb, 2),
         }
 
+
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+
     finally:
+        db.close()
         try:
-            os.remove(temp_path)
+            os.remove(tempPath)
         except Exception:
             pass
 
+# ======================================================
+# CHAT API
+# ======================================================
 @router.post("/chat")
-async def chat_api(query: str, session_id: Optional[str] = None):
-    session_id = session_id or create_chat_session()
+async def chatApi(*, documentId: int, query: str):
+    """
+    Document-anchored chat.
 
-    result = chat_with_session(
-        session_id=session_id,
+    - Same document → same session
+    - Exactly ONE LLM call
+    """
+    if not documentId:
+        raise HTTPException(status_code=400, detail="documentId is required")
+
+    sessionId = getOrCreateSessionForDocument(documentId)
+
+    result = chatWithDocument(
+        documentId=documentId,
+        sessionId=sessionId,
         query=query,
     )
 
     return {
-        "session_id": session_id,
-        "response": result["answer"],
+        "documentId": documentId,
+        "sessionId": sessionId,
+        "answer": result["answer"],
         "citations": result.get("citations", []),
     }
 
 
-@router.post("/chat/stream")
-async def chat_stream_api(query: str, session_id: Optional[str] = None):
-    session_id = session_id or create_chat_session()
+# ======================================================
+# SUMMARY API
+# ======================================================
+@router.get("/summary/{documentId}")
+def summarizeApi(documentId: int):
 
-    return StreamingResponse(
-        chat_stream(session_id=session_id, query=query),
-        media_type="text/plain",
-    )
+    getOrCreateSessionForDocument(documentId)
 
-@router.get("/summary/{document_id}")
-def summarize_document(document_id: str):
-    """
-    Cached, safe, ONE LLM CALL MAX
-    """
-    return summarize_doc(document_id)
+    return summarizeDocument(documentId)

@@ -2,132 +2,122 @@ import uuid
 import logging
 import shutil
 import os
-from typing import List, Dict
+from typing import Dict
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 
 from app.db import SessionLocal
 from app.models import (
+    Document,
     AIDocument,
-    DocuementChunks,
+    ChatSession,
+    DocumentChunk,
     DocumentVersion,
     DocumentReview,
-    Document,
     Company,
 )
-from app.AIhelpers.chunk_helper import chunk_text
-from app.AIhelpers.format_helper import iter_file_pages
+from app.AIhelpers.chunk_helper import chunkText
+from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
 
 BASE_STORAGE_PATH = "storage"
 logger = logging.getLogger(__name__)
 
-# ==============================
-# INGESTION CONFIG
-# ==============================
-
 MAX_UPLOAD_MB = 50
 CHUNK_BATCH_SIZE = 32
 
 
-# ==============================
-# HELPERS
-# ==============================
+# ======================================================
+# MAIN AI INGESTION PIPELINE
+# ======================================================
 
-def normalize_content(text: str) -> str:
-    """
-    Detect tabular vs textual content and normalize
-    """
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    if not lines:
-        return ""
-
-    numeric_ratio = sum(any(c.isdigit() for c in l) for l in lines) / len(lines)
-    short_ratio = sum(len(l.split()) <= 5 for l in lines) / len(lines)
-
-    if numeric_ratio > 0.35 or short_ratio > 0.6:
-        return "\n".join(f"[ROW] {l}" for l in lines)
-    else:
-        return "\n".join(f"[TEXT] {l}" for l in lines)
-
-
-# ==============================
-# MAIN INGESTION PIPELINE
-# ==============================
-
-def process_document(
+def processDocument(
     *,
-    file_path: str,
-    document_id: str,
+    filePath: str,
+    documentId: int,
     filename: str,
-    session_id: str | None,
-    file_type: str,
-    file_size_mb: float,
+    fileType: str,
+    fileSizeMb: float,
 ) -> Dict:
     """
-    Core ingestion pipeline:
-    - Create AIDocument (FK parent)
-    - Extract text (all formats)
-    - Normalize
-    - Chunk
-    - Store chunks
+    AI ingestion pipeline.
+
+    🔒 GUARANTEES:
+    - Session is created BEFORE AIDocument
+    - ai_documents.session_id is NEVER NULL
+    - One document → one session
     """
 
+    if not isinstance(documentId, int):
+        raise TypeError(
+            f"documentId must be int, got {type(documentId)} → {documentId}"
+        )
+
     db: Session = SessionLocal()
-    chunks_created = 0
-    ocr_used = False
+    chunksCreated = 0
+    ocrUsed = False
 
     try:
         # --------------------------------------------------
-        # 1️⃣ CREATE AI DOCUMENT (FK PARENT)  🔥 REQUIRED
+        # 1️⃣ CREATE SESSION (FIRST — CRITICAL)
         # --------------------------------------------------
-        ai_doc = AIDocument(
-            document_id=document_id,
-            session_id=session_id,
-            filename=filename,
-            file_type=file_type,
-            file_size_mb=file_size_mb,
+        session = ChatSession()
+        db.add(session)
+        db.flush()   # generates UUID
+
+        # --------------------------------------------------
+        # 2️⃣ CREATE AI DOCUMENT (WITH SESSION)
+        # --------------------------------------------------
+        aiDocument = (
+            db.query(AIDocument)
+            .filter(AIDocument.document_id == documentId)
+            .first()
         )
-        db.add(ai_doc)
-        db.commit()  # 🔴 MUST COMMIT BEFORE CHUNKS
 
-        logger.info(f"AIDocument created: {document_id}")
+        if not aiDocument:
+            aiDocument = AIDocument(
+                document_id=documentId,
+                session_id=session.session_id,   # 🔥 NOT NULL
+                filename=filename,
+                file_type=fileType,
+                file_size_mb=fileSizeMb,
+            )
+            db.add(aiDocument)
+            db.commit()
+        else:
+            # Safety: should never happen, but keep system stable
+            session.session_id = aiDocument.session_id
 
         # --------------------------------------------------
-        # 2️⃣ EXTRACT + CHUNK
+        # 3️⃣ EXTRACT + CHUNK FILE
         # --------------------------------------------------
-        for page_no, raw_text, used_ocr in iter_file_pages(file_path):
-            if not raw_text or not raw_text.strip():
+        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
+            if not rawText or not rawText.strip():
                 continue
 
-            ocr_used = ocr_used or used_ocr
-            normalized = normalize_content(raw_text)
+            ocrUsed = ocrUsed or usedOcr
 
-            for chunk in chunk_text(normalized):
+            for chunk in chunkText(rawText):
                 db.add(
-                    DocuementChunks(
+                    DocumentChunk(
                         id=uuid.uuid4(),
-                        document_id=document_id,
-                        session_id=session_id,
-                        chunk_index=chunks_created,
-                        page_number=page_no,
+                        document_id=documentId,
+                        session_id=aiDocument.session_id,  # 🔒 SAME SESSION
+                        chunk_index=chunksCreated,
                         chunk_text=chunk,
+                        page_number=pageNumber,
                     )
                 )
-                chunks_created += 1
+                chunksCreated += 1
 
         db.commit()
 
-        logger.info(
-            f"Document {document_id}: {chunks_created} chunks stored | OCR={ocr_used}"
-        )
-
         return {
-            "chunks": chunks_created,
-            "ocr_used": ocr_used,
+            "chunks": chunksCreated,
+            "ocr_used": ocrUsed,
         }
 
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("Document ingestion failed")
         raise
@@ -136,20 +126,21 @@ def process_document(
         db.close()
 
 
-# ==============================
-# DOCUMENT SAVE (BUSINESS FLOW)
-# ==============================
+# ======================================================
+# DOCUMENT SAVE / SUBMIT
+# ======================================================
 
-def save_document(
+def saveDocument(
     db: Session,
-    document_id: int,
+    *,
+    documentId: int,
     payload: DocumentSaveSchema,
-    current_user: dict,
+    currentUser: dict,
 ):
     document = (
         db.query(Document)
         .filter(
-            Document.id == document_id,
+            Document.id == documentId,
             Document.is_delete.is_(False),
         )
         .first()
@@ -158,7 +149,7 @@ def save_document(
     if not document:
         raise HTTPException(404, "Document not found")
 
-    if document.uploaded_by != current_user["user_id"]:
+    if document.uploaded_by != currentUser["user_id"]:
         raise HTTPException(403, "Permission denied")
 
     if document.status != "DRAFT":
@@ -192,28 +183,28 @@ def save_document(
     db.commit()
 
     return {
-        "document_id": document.id,
+        "documentId": document.id,
         "status": document.status,
     }
 
 
-# ==============================
-# DRAFT CREATION
-# ==============================
+# ======================================================
+# CREATE DOCUMENT DRAFT (BUSINESS FLOW)
+# ======================================================
 
-def create_document_draft(
+def createDocumentDraft(
     db: Session,
     *,
-    ai_document_id: str,
-    temp_file_path: str,
-    original_filename: str,
-    department_id: int,
-    current_user: dict,
+    aidocumentId: int,
+    tempFilePath: str,
+    originalFilename: str,
+    departmentId: int,
+    currentUser: dict,
 ):
     company = (
         db.query(Company)
         .filter(
-            Company.id == current_user["company_id"],
+            Company.id == currentUser["company_id"],
             Company.is_delete.is_(False),
         )
         .first()
@@ -224,43 +215,43 @@ def create_document_draft(
 
     document = Document(
         company_id=company.id,
-        department_id=department_id,
-        uploaded_by=current_user["user_id"],
+        department_id=departmentId,
+        uploaded_by=currentUser["user_id"],
         status="DRAFT",
     )
     db.add(document)
     db.flush()
 
-    doc_dir = os.path.join(
+    docDir = os.path.join(
         BASE_STORAGE_PATH,
         "companies",
         str(company.id),
         "documents",
         str(document.id),
     )
-    os.makedirs(doc_dir, exist_ok=True)
+    os.makedirs(docDir, exist_ok=True)
 
-    permanent_path = os.path.join(
-        doc_dir,
-        f"v1_{original_filename}",
+    permanentPath = os.path.join(
+        docDir,
+        f"v1_{originalFilename}",
     )
 
-    shutil.move(temp_file_path, permanent_path)
+    shutil.move(tempFilePath, permanentPath)
 
-    file_size_bytes = os.path.getsize(permanent_path)
+    fileSizeBytes = os.path.getsize(permanentPath)
 
     version = DocumentVersion(
         document_id=document.id,
         version_number=1,
-        file_path=permanent_path,
-        file_name=original_filename,
-        file_size_bytes=file_size_bytes,
-        ai_document_id=ai_document_id,
-        created_by=current_user["user_id"],
+        file_path=permanentPath,
+        file_name=originalFilename,
+        file_size_bytes=fileSizeBytes,
+        ai_document_id=aidocumentId,
+        created_by=currentUser["user_id"],
     )
 
     db.add(version)
-    company.remaining_space -= file_size_bytes
+    company.remaining_space -= fileSizeBytes
     db.commit()
 
     return document.id

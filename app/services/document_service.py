@@ -2,7 +2,7 @@ import uuid
 import logging
 import shutil
 import os
-from typing import Dict
+from typing import Dict, List
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 

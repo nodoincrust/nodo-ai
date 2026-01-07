@@ -212,12 +212,10 @@ class AIDocument(Base):
 
     id=Column(BigInteger, primary_key=True)
 
-    # 🔑 SAME AS documents.id (ONE-TO-ONE)
     document_id = Column(
         BigInteger, ForeignKey("documents.id"), nullable=False, index=True
     )
 
-    # 🔒 SESSION IS MANDATORY & UNIQUE
     session_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
@@ -257,7 +255,7 @@ class DocumentChunk(Base):
 
     document_id = Column(
         BigInteger,
-        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
+        ForeignKey("ai_documents.id", ondelete="CASCADE"),
         nullable=False,
     )
 
@@ -293,7 +291,7 @@ class DocumentSummary(Base):
 
     document_id = Column(
         BigInteger,
-        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
+        ForeignKey("ai_documents.id", ondelete="CASCADE"),
         primary_key=True,
     )
 
@@ -304,7 +302,7 @@ class DocumentSummary(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    ai_document = relationship("AIDocument", back_populates="summary")
+    ai_document = relationship("AIDocument", back_populates="summary") 
 
 # =====================================================
 # SESSION CHAT MESSAGES (DOCUMENT-SCOPED)
@@ -323,7 +321,7 @@ class SessionMessage(Base):
 
     document_id = Column(
         BigInteger,
-        ForeignKey("ai_documents.document_id", ondelete="CASCADE"),
+        ForeignKey("ai_documents.id", ondelete="CASCADE"),
         nullable=False,
     )
 
@@ -351,18 +349,6 @@ class SessionMemorySummary(Base):
 
     summary = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-# class SidebarMenu(Base):
-#     __tablename__ = "sidebar_menus"
-
-#     id = Column(BigInteger, primary_key=True)
-#     menu_key = Column(String(50), unique=True, nullable=False)
-#     label = Column(String(100), nullable=False)
-#     path = Column(String(255), nullable=False)
-#     icon = Column(String(50), nullable=True)
-#     sort_order = Column(Integer, default=0)
-#     is_active = Column(Boolean, default=True)
-
 
 class SidebarMenu(Base):
     __tablename__ = "sidebar_menus"

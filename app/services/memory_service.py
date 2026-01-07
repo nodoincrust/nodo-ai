@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
-
-from app.models import SessionMessages, SessionMemorySummery
+from app.models import SessionMessage, SessionMemorySummary
 from app.AIhelpers.llm_helper import askLlm
 
 
@@ -11,9 +10,9 @@ def updateMemorySummary(
     messageCount: int | None = None,
 ) -> None:
     messages = (
-        db.query(SessionMessages)
+        db.query(SessionMessage)
         .filter_by(session_id=sessionId)
-        .order_by(SessionMessages.created_at.asc())
+        .order_by(SessionMessage.created_at.asc())
         .all()
     )
 
@@ -21,18 +20,22 @@ def updateMemorySummary(
         return
 
     conversationText = "\n".join(
-        f"{m.role.upper()}: {m.content}" for m in messages
+        f"{m.role.upper()}: {m.content}"
+        for m in messages
     )
 
-    llmResult = askLlm(
-        context="Summarize conversation memory.",
-        question=conversationText,
+    prompt = (
+        "Summarize the conversation below.\n"
+        "Do NOT include document details unless explicitly discussed.\n"
+        "Keep it concise and factual.\n\n"
+        f"{conversationText}"
     )
 
+    llmResult = askLlm(context=prompt, question="Summarize conversation.")
     summaryText = llmResult["data"]["answer"]
 
     existing = (
-        db.query(SessionMemorySummery)
+        db.query(SessionMemorySummary)
         .filter_by(session_id=sessionId)
         .first()
     )
@@ -43,7 +46,7 @@ def updateMemorySummary(
             existing.message_count = messageCount
     else:
         db.add(
-            SessionMemorySummery(
+            SessionMemorySummary(
                 session_id=sessionId,
                 summary=summaryText,
                 message_count=messageCount,

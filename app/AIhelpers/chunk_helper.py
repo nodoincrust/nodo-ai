@@ -1,4 +1,8 @@
 from typing import List, Iterable, Dict, Any
+from sqlalchemy.orm import Session
+
+from app.models import DocumentChunk
+from app.AIhelpers.embedding_helper import createEmbedding
 
 
 def chunkText(
@@ -52,3 +56,48 @@ def chunkTextFromPages(
             "text": " ".join(wordBuffer),
             "page": pageBuffer[0],
         }
+
+
+def createDocumentChunks(
+    *,
+    db: Session,
+    ai_document_id: int,     # 🔑 ai_documents.id ONLY
+    session_id: str,
+    pages: Iterable[Any],    # [(page_no, text)] or [text]
+    chunkSize: int = 512,
+    overlap: int = 60,
+) -> int:
+
+    chunk_index = 0
+
+    for chunk in chunkTextFromPages(
+        pages,
+        chunkSize=chunkSize,
+        overlap=overlap,
+        includePageNumber=True,
+    ):
+        text = chunk["text"].strip()
+        page_number = chunk["page"]
+
+        if not text:
+            continue
+
+        # 🔥 EMBEDDING GENERATED BEFORE DB INSERT
+        embedding = createEmbedding(text)
+
+        db.add(
+            DocumentChunk(
+                document_id=ai_document_id,
+                session_id=session_id,
+                chunk_index=chunk_index,
+                chunk_text=text,
+                embedding=embedding,          #STORED
+                page_number=page_number,
+            )
+        )
+
+        chunk_index += 1
+
+    db.commit()
+
+    return chunk_index

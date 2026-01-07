@@ -1,14 +1,16 @@
 import shutil
 import os
 import tempfile
+
 from fastapi import (
     APIRouter,
     UploadFile,
     File,
     HTTPException,
     BackgroundTasks,
-    Form,
 )
+from sqlalchemy.orm import Session
+
 from app.db import SessionLocal
 from app.models import Document
 from app.services.document_service import processDocument
@@ -18,7 +20,7 @@ from app.services.ai_DBservice import getOrCreateSessionForDocument
 
 ASYNC_THRESHOLD_MB = 2.0
 
-router = APIRouter(prefix="/ai")
+router = APIRouter(prefix="/ai", tags=["AI"])
 
 
 # ======================================================
@@ -29,31 +31,35 @@ async def uploadDocument(
     backgroundTasks: BackgroundTasks,
     file: UploadFile = File(...),
 ):
-
     if not file.filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # --------------------------------------------------
-    # 1️⃣ SAVE TEMP FILE
-    # --------------------------------------------------
-    _, extension = os.path.splitext(file.filename)
+    tempPath = None
+    db: Session = SessionLocal()
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tempPath = tmp.name
-
-    if not os.path.exists(tempPath) or os.path.getsize(tempPath) == 0:
-        os.remove(tempPath)
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-    fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
-
-    db = SessionLocal()
     try:
+        # --------------------------------------------------
+        # 1️⃣ SAVE TEMP FILE
+        # --------------------------------------------------
+        _, extension = os.path.splitext(file.filename)
+        extension = extension or ".pdf"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tempPath = tmp.name
+
+        if not os.path.exists(tempPath) or os.path.getsize(tempPath) == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
+
+        # --------------------------------------------------
+        # 2️⃣ CREATE BUSINESS DOCUMENT
+        # --------------------------------------------------
         document = Document(
-            company_id=3,        # ✅ DEFAULT
-            department_id=1,     # ✅ DEFAULT
-            uploaded_by=3,       # ✅ DEFAULT
+            company_id=3,        # TODO: make dynamic later
+            department_id=1,
+            uploaded_by=3,
             status="DRAFT",
             current_version=1,
             is_active=True,
@@ -64,16 +70,16 @@ async def uploadDocument(
         db.commit()
         db.refresh(document)
 
-        documentId = document.id  # ✅ SAFE INT
+        document_id = document.id
 
         # --------------------------------------------------
-        # 3️⃣ PROCESS DOCUMENT
+        # 3️⃣ PROCESS DOCUMENT (ASYNC / SYNC)
         # --------------------------------------------------
         if fileSizeMb >= ASYNC_THRESHOLD_MB:
             backgroundTasks.add_task(
                 processDocument,
                 filePath=tempPath,
-                documentId=documentId,
+                document_id=document_id,
                 filename=file.filename,
                 fileType=file.content_type,
                 fileSizeMb=fileSizeMb,
@@ -81,28 +87,31 @@ async def uploadDocument(
 
             return {
                 "status": "processing",
-                "documentId": documentId,
-                "fileSizeMb": round(fileSizeMb, 2),
+                "document_id": document_id,
+                "file_size_mb": round(fileSizeMb, 2),
             }
 
         result = processDocument(
             filePath=tempPath,
-            documentId=documentId,
+            document_id=document_id,
             filename=file.filename,
             fileType=file.content_type,
             fileSizeMb=fileSizeMb,
         )
-        sessionId = getOrCreateSessionForDocument(documentId)
+
+        # --------------------------------------------------
+        # 4️⃣ FETCH SESSION (READ-ONLY)
+        # --------------------------------------------------
+        session_id = getOrCreateSessionForDocument(document_id)
 
         return {
             "status": "success",
-            "documentId": documentId,
-            "sessionId": sessionId, 
+            "document_id": document_id,
+            "session_id": session_id,
             "chunks": result.get("chunks", 0),
-            "ocrUsed": result.get("ocr_used", False),
-            "fileSizeMb": round(fileSizeMb, 2),
+            "ocr_used": result.get("ocr_used", False),
+            "file_size_mb": round(fileSizeMb, 2),
         }
-
 
     except Exception as exc:
         db.rollback()
@@ -110,36 +119,45 @@ async def uploadDocument(
 
     finally:
         db.close()
-        try:
+        if tempPath and os.path.exists(tempPath):
             os.remove(tempPath)
-        except Exception:
-            pass
+
 
 # ======================================================
 # CHAT API
 # ======================================================
 @router.post("/chat")
-async def chatApi(*, documentId: int, query: str):
+async def chatApi(
+    *,
+    document_id: int,
+    query: str,
+):
     """
     Document-anchored chat.
 
-    - Same document → same session
-    - Exactly ONE LLM call
+    - One document → one session
+    - Works even if /summary is never called
     """
-    if not documentId:
-        raise HTTPException(status_code=400, detail="documentId is required")
+    if not document_id:
+        raise HTTPException(status_code=400, detail="document_id is required")
 
-    sessionId = getOrCreateSessionForDocument(documentId)
+    # --------------------------------------------------
+    # 1️⃣ FETCH SESSION (READ-ONLY)
+    # --------------------------------------------------
+    session_id = getOrCreateSessionForDocument(document_id)
 
+    # --------------------------------------------------
+    # 2️⃣ CHAT
+    # --------------------------------------------------
     result = chatWithDocument(
-        documentId=documentId,
-        sessionId=sessionId,
+        document_id=document_id,
+        session_id=session_id,
         query=query,
     )
 
     return {
-        "documentId": documentId,
-        "sessionId": sessionId,
+        "document_id": document_id,
+        "session_id": session_id,
         "answer": result["answer"],
         "citations": result.get("citations", []),
     }
@@ -148,9 +166,16 @@ async def chatApi(*, documentId: int, query: str):
 # ======================================================
 # SUMMARY API
 # ======================================================
-@router.get("/summary/{documentId}")
-def summarizeApi(documentId: int):
+@router.get("/summary/{document_id}")
+def summarizeApi(document_id: int):
+    """
+    Document summary.
 
-    getOrCreateSessionForDocument(documentId)
+    - Uses ONLY document_chunks
+    - Generates summary + tags
+    - Safe to call anytime
+    """
+    # Ensure session exists (read-only check)
+    getOrCreateSessionForDocument(document_id)
 
-    return summarizeDocument(documentId)
+    return summarizeDocument(document_id)

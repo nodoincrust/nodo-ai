@@ -5,7 +5,7 @@ BASE_STORAGE_PATH = "storage"
 
 def saveDocumentFile(
     companyId: int,
-    documentId: int,
+    document_id: int,
     version: int,
     uploadFile,
 ) -> str:
@@ -14,7 +14,7 @@ def saveDocumentFile(
         "companies",
         str(companyId),
         "documents",
-        str(documentId),
+        str(document_id),
     )
 
     os.makedirs(companyDirectory, exist_ok=True)

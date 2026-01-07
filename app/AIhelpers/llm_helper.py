@@ -3,7 +3,7 @@ import re
 from typing import Iterable, List, Dict
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "llama3.1:latest"
+MODEL = "llama3.1"
 
 SYSTEM_PROMPT = """
 You are an enterprise-grade AI assistant operating inside a document-centric,
@@ -11,6 +11,7 @@ memory-aware question answering system.
 
 CORE RULES:
 • Answer only from provided document context
+• If the document provides partial information, respond with the best possible interpretation and clearly state any limitations.
 • Do NOT hallucinate or invent facts
 • If information is missing, say: "The provided document does not contain this information"
 • Do NOT use external knowledge unless explicitly allowed
@@ -51,8 +52,8 @@ def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.1,
-            "num_predict": 1000,
+            "temperature": 0.8,
+            "num_predict": 400,
         },
         "stream": False,
     }

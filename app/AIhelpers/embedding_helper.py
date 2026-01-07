@@ -2,17 +2,23 @@ import redis
 import requests
 import hashlib
 import json
-from typing import List, Dict
+import logging
+from typing import List
+
+logger = logging.getLogger("ai.embedding")
 
 REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 EMBED_URL = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
+EMBED_DIM = 768
+CACHE_TTL = 86400
+TIMEOUT = 60
 
-EMBED_TIMEOUT = 30          # seconds
-CACHE_TTL = 86400           # 24 hours
-MAX_BATCH_SIZE = 16         # HARD LIMIT
 
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
 
 def hashText(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -22,68 +28,81 @@ def getCacheKey(text: str) -> str:
     return f"emb:{hashText(text)}"
 
 
-def createEmbeddings(texts: List[str]) -> List[List[float]]:
-    """
-    Create embeddings with Redis caching and batch safety.
-    """
-    if not texts:
-        return []
-
-    results: List[List[float] | None] = [None] * len(texts)
-    missing: List[Dict] = []
-
-    pipe = REDIS.pipeline()
-    for text in texts:
-        pipe.get(getCacheKey(text))
-    cachedResults = pipe.execute()
-
-    for index, cachedValue in enumerate(cachedResults):
-        if cachedValue:
-            results[index] = json.loads(cachedValue)
-        else:
-            missing.append({"index": index, "text": texts[index]})
-
-    if not missing:
-        return results  # type: ignore
-
-    for i in range(0, len(missing), MAX_BATCH_SIZE):
-        batch = missing[i : i + MAX_BATCH_SIZE]
-
-        payload = {
-            "model": EMBED_MODEL,
-            "prompt": [item["text"] for item in batch],
-        }
-
-        try:
-            response = requests.post(
-                EMBED_URL,
-                json=payload,
-                timeout=EMBED_TIMEOUT,
-            )
-            response.raise_for_status()
-            vectors = response.json()["embeddings"]
-
-        except Exception:
-            # 🔥 FAIL-SAFE: zero-vector fallback
-            dimension = 768
-            vectors = [[0.0] * dimension for _ in batch]
-
-        for item, vector in zip(batch, vectors):
-            index = item["index"]
-            text = item["text"]
-
-            results[index] = vector
-            REDIS.setex(
-                getCacheKey(text),
-                CACHE_TTL,
-                json.dumps(vector),
-            )
-
-    return results  # type: ignore
-
+# --------------------------------------------------
+# SINGLE TEXT EMBEDDING (CORE, OLLAMA SAFE)
+# --------------------------------------------------
 
 def createEmbedding(text: str) -> List[float]:
     """
-    Convenience wrapper for single-text embedding.
+    Generate embedding for a SINGLE text (Ollama compatible).
     """
-    return createEmbeddings([text])[0]
+
+    if not isinstance(text, str):
+        raise TypeError(f"Expected str, got {type(text)}")
+
+    text = text.strip()
+    if not text:
+        raise ValueError("Empty text passed for embedding")
+
+    cache_key = getCacheKey(text)
+
+    # 1️⃣ Redis cache
+    cached = REDIS.get(cache_key)
+    if cached:
+        vec = json.loads(cached)
+        if isinstance(vec, list) and len(vec) == EMBED_DIM:
+            return vec
+        REDIS.delete(cache_key)
+
+    # 2️⃣ Ollama call (ONE TEXT ONLY)
+    payload = {
+        "model": EMBED_MODEL,
+        "prompt": text,
+    }
+
+    response = requests.post(
+        EMBED_URL,
+        json=payload,
+        timeout=TIMEOUT,
+    )
+
+    if response.status_code != 200:
+        logger.error("Ollama embedding failed: %s", response.text)
+        raise RuntimeError("Embedding generation failed")
+
+    data = response.json()
+    embedding = data.get("embedding")
+
+    # 3️⃣ Validate
+    if not isinstance(embedding, list):
+        raise RuntimeError("Invalid embedding format from Ollama")
+
+    if len(embedding) != EMBED_DIM:
+        raise RuntimeError(
+            f"Invalid embedding dimension {len(embedding)}"
+        )
+
+    # 4️⃣ Cache + return
+    REDIS.setex(cache_key, CACHE_TTL, json.dumps(embedding))
+    return embedding
+
+
+# --------------------------------------------------
+# LIST / BATCH API (SAFE WRAPPER)
+# --------------------------------------------------
+
+def createEmbeddings(texts: List[str]) -> List[List[float]]:
+    """
+    Batch-friendly API.
+    Internally calls Ollama ONE TEXT AT A TIME.
+    """
+
+    if not isinstance(texts, list):
+        raise TypeError("createEmbeddings expects a list of strings")
+
+    embeddings: List[List[float]] = []
+
+    for text in texts:
+        embeddings.append(createEmbedding(text))
+
+    return embeddings

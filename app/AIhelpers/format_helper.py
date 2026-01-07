@@ -37,14 +37,23 @@ def iterateFilePages(filePath: str) -> Iterator[Tuple[int, str, bool]]:
 
 def extractPdf(path: str):
     document = fitz.open(path)
+    pageNumber = 1
 
-    for pageNumber, page in enumerate(document, start=1):
-        text = page.get_text().strip()
+    for page in document:
+        text_blocks = []
 
-        if text:
-            yield pageNumber, text, False
+        # 1️⃣ Extract text blocks
+        blocks = page.get_text("blocks")
+        for block in blocks:
+            block_text = block[4].strip()
+            if block_text:
+                text_blocks.append(block_text)
+
+        if text_blocks:
+            yield pageNumber, "\n".join(text_blocks), False
         else:
-            pix = page.get_pixmap()
+            # 2️⃣ OCR fallback (image-heavy page)
+            pix = page.get_pixmap(dpi=200)
             image = Image.frombytes(
                 "RGB",
                 (pix.width, pix.height),
@@ -52,74 +61,104 @@ def extractPdf(path: str):
             )
             ocrText = safe_ocr(image)
             if ocrText.strip():
-                yield pageNumber, ocrText, True
+                yield pageNumber, ocrText.strip(), True
+
+        pageNumber += 1
 
 
 def extractDocx(path: str):
-    """
-    Generic DOCX extractor with deduplication.
-    """
     document = docx.Document(path)
-    seen = set()
-    lines = []
+    buffer = []
+    pageNumber = 1
 
-    for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-        if not text:
-            continue
+    def flush():
+        nonlocal buffer, pageNumber
+        if buffer:
+            yield pageNumber, "\n".join(buffer), False
+            buffer = []
+            pageNumber += 1
 
-        text = " ".join(text.split())
-        key = text.lower()
+    # Text paragraphs
+    for para in document.paragraphs:
+        text = para.text.strip()
+        if text:
+            buffer.append(text)
+        if len(buffer) >= 6:
+            yield from flush()
 
-        if key in seen:
-            continue
+    yield from flush()
 
-        seen.add(key)
-        lines.append(text)
-
-    if lines:
-        yield 1, "\n".join(lines), False
-
+    # Embedded images → OCR
+    for rel in document.part._rels.values():
+        if "image" in rel.reltype:
+            try:
+                image = Image.open(io.BytesIO(rel.target_part.blob))
+                ocrText = safe_ocr(image)
+                if ocrText.strip():
+                    yield pageNumber, ocrText.strip(), True
+                    pageNumber += 1
+            except Exception:
+                continue
 
 def extractExcel(path: str):
     sheets = pd.read_excel(path, sheet_name=None)
     pageNumber = 1
 
-    for sheetName, dataframe in sheets.items():
-        dataframe = dataframe.dropna(how="all")
-        if dataframe.empty:
+    for sheetName, df in sheets.items():
+        df = df.dropna(how="all")
+        if df.empty:
             continue
 
         rows = []
-        for _, row in dataframe.iterrows():
-            values = [str(value) for value in row if pd.notna(value)]
+        for _, row in df.iterrows():
+            values = [str(v) for v in row if pd.notna(v)]
             if values:
                 rows.append(" | ".join(values))
 
-        if rows:
-            text = f"[SHEET: {sheetName}]\n" + "\n".join(rows)
-            yield pageNumber, text, False
-            pageNumber += 1
+            # Flush every ~10 rows
+            if len(rows) >= 10:
+                yield pageNumber, f"[SHEET: {sheetName}]\n" + "\n".join(rows), False
+                rows = []
+                pageNumber += 1
 
+        if rows:
+            yield pageNumber, f"[SHEET: {sheetName}]\n" + "\n".join(rows), False
+            pageNumber += 1
 
 def extractCsv(path: str):
     rows = []
+    pageNumber = 1
+
     with open(path, encoding="utf-8", errors="ignore") as file:
         reader = csv.reader(file)
         for row in reader:
             if row:
                 rows.append(" | ".join(row))
 
-    if rows:
-        yield 1, "\n".join(rows), False
+            if len(rows) >= 15:
+                yield pageNumber, "\n".join(rows), False
+                rows = []
+                pageNumber += 1
 
+    if rows:
+        yield pageNumber, "\n".join(rows), False
 
 def extractTxt(path: str):
     with open(path, encoding="utf-8", errors="ignore") as file:
-        text = file.read().strip()
-        if text:
-            yield 1, text, False
+        lines = [line.strip() for line in file if line.strip()]
 
+    buffer = []
+    pageNumber = 1
+
+    for line in lines:
+        buffer.append(line)
+        if len(buffer) >= 10:
+            yield pageNumber, "\n".join(buffer), False
+            buffer = []
+            pageNumber += 1
+
+    if buffer:
+        yield pageNumber, "\n".join(buffer), False
 
 def extractImage(path: str):
     image = Image.open(path)

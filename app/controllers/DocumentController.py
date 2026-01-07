@@ -40,7 +40,7 @@ async def uploadDocument(
 
         fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
 
-        businessDocumentId = createDocumentDraft(
+        businessdocument_id = createDocumentDraft(
             db=db,
             tempFilePath=tempPath,
             originalFilename=file.filename,
@@ -50,7 +50,7 @@ async def uploadDocument(
 
         aiResult = processDocument(
             filePath=tempPath,
-            documentId=businessDocumentId,
+            document_id=businessdocument_id,
             filename=file.filename,
             fileType=file.content_type,
             fileSizeMb=fileSizeMb,
@@ -58,7 +58,7 @@ async def uploadDocument(
 
         return {
             "status": "success",
-            "documentId": businessDocumentId,
+            "document_id": businessdocument_id,
             "chunks": aiResult.get("chunks"),
             "ocrUsed": aiResult.get("ocr_used"),
             "fileSizeMb": round(fileSizeMb, 2),
@@ -68,16 +68,16 @@ async def uploadDocument(
         if tempPath and os.path.exists(tempPath):
             os.remove(tempPath)
 
-@router.post("/{documentId}/save")
+@router.post("/{document_id}/save")
 def saveDocumentApi(
-    documentId: int,
+    document_id: int,
     payload: DocumentSaveSchema,
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
     result = saveDocument(
         db=db,
-        documentId=documentId,
+        document_id=document_id,
         payload=payload,
         currentUser=currentUser,
     )

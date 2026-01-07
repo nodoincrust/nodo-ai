@@ -16,34 +16,23 @@ from app.models import (
 )
 
 
-def getOrCreateSessionForDocument(documentId: int) -> str:
+def getOrCreateSessionForDocument(document_id: int) -> str:
+    """
+    READ-ONLY helper.
+    Assumes processDocument already created session.
+    """
     db: Session = SessionLocal()
     try:
         ai_doc = (
             db.query(AIDocument)
-            .filter(AIDocument.document_id == documentId)
+            .filter(AIDocument.document_id == document_id)
             .first()
         )
 
-        if not ai_doc:
-            raise ValueError(
-                f"AIDocument does not exist for documentId={documentId}"
-            )
+        if not ai_doc or not ai_doc.session_id:
+            raise RuntimeError("AI session not initialized for document")
 
-        # ✅ SESSION ALREADY EXISTS
-        if ai_doc.session_id:
-            return str(ai_doc.session_id)
-
-        # 🔥 CREATE SESSION
-        session = ChatSession()
-        db.add(session)
-        db.flush()  # generates UUID
-
-        # 🔗 LINK SESSION → DOCUMENT
-        ai_doc.session_id = session.session_id
-        db.commit()
-
-        return str(session.session_id)
+        return str(ai_doc.session_id)
 
     finally:
         db.close()
@@ -55,7 +44,7 @@ def getOrCreateSessionForDocument(documentId: int) -> str:
 def storeDocumentChunk(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
     sessionId: Optional[str],
     chunkText: str,
     embedding: List[float],
@@ -65,7 +54,7 @@ def storeDocumentChunk(
     db.add(
         DocumentChunk(
             id=uuid.uuid4(),
-            document_id=documentId,
+            document_id=document_id,
             session_id=sessionId,
             chunk_text=chunkText,
             embedding=embedding,
@@ -78,11 +67,11 @@ def storeDocumentChunk(
 def fetchDocumentChunks(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
 ) -> List[str]:
     rows = (
         db.query(DocumentChunk.chunk_text)
-        .filter(DocumentChunk.document_id == documentId)
+        .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.chunk_index)
         .all()
     )
@@ -92,13 +81,13 @@ def fetchDocumentChunks(
 def semanticSearchChunks(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
     queryEmbedding: List[float],
     limit: int = 5,
 ) -> List[DocumentChunk]:
     return (
         db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == documentId)
+        .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.embedding.l2_distance(queryEmbedding))
         .limit(limit)
         .all()
@@ -111,12 +100,12 @@ def semanticSearchChunks(
 def upsertDocumentSummary(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
     summaryText: str,
 ) -> None:
     existing = (
         db.query(DocumentSummary)
-        .filter(DocumentSummary.document_id == documentId)
+        .filter(DocumentSummary.document_id == document_id)
         .first()
     )
 
@@ -126,7 +115,7 @@ def upsertDocumentSummary(
     else:
         db.add(
             DocumentSummary(
-                document_id=documentId,
+                document_id=document_id,
                 summary_text=summaryText,
             )
         )
@@ -137,11 +126,11 @@ def upsertDocumentSummary(
 def getDocumentSummary(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
 ) -> Optional[str]:
     summary = (
         db.query(DocumentSummary)
-        .filter(DocumentSummary.document_id == documentId)
+        .filter(DocumentSummary.document_id == document_id)
         .first()
     )
     return summary.summary_text if summary else None

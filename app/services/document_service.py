@@ -16,7 +16,7 @@ from app.models import (
     DocumentReview,
     Company,
 )
-from app.AIhelpers.chunk_helper import chunkText
+from app.AIhelpers.chunk_helper import createDocumentChunks
 from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
 
@@ -34,97 +34,74 @@ CHUNK_BATCH_SIZE = 32
 def processDocument(
     *,
     filePath: str,
-    documentId: int,
+    document_id: int,     # documents.id
     filename: str,
     fileType: str,
     fileSizeMb: float,
 ) -> Dict:
-    """
-    AI ingestion pipeline.
-
-    🔒 GUARANTEES:
-    - Session is created BEFORE AIDocument
-    - ai_documents.session_id is NEVER NULL
-    - One document → one session
-    """
-
-    if not isinstance(documentId, int):
-        raise TypeError(
-            f"documentId must be int, got {type(documentId)} → {documentId}"
-        )
 
     db: Session = SessionLocal()
-    chunksCreated = 0
     ocrUsed = False
 
     try:
-        # --------------------------------------------------
-        # 1️⃣ CREATE SESSION (FIRST — CRITICAL)
-        # --------------------------------------------------
-        session = ChatSession()
-        db.add(session)
-        db.flush()   # generates UUID
-
-        # --------------------------------------------------
-        # 2️⃣ CREATE AI DOCUMENT (WITH SESSION)
-        # --------------------------------------------------
-        aiDocument = (
+        ai_doc = (
             db.query(AIDocument)
-            .filter(AIDocument.document_id == documentId)
+            .filter(AIDocument.document_id == document_id)
             .first()
         )
 
-        if not aiDocument:
-            aiDocument = AIDocument(
-                document_id=documentId,
-                session_id=session.session_id,   # 🔥 NOT NULL
+        if not ai_doc:
+            session = ChatSession()
+            db.add(session)
+            db.flush()
+
+            ai_doc = AIDocument(
+                document_id=document_id,
+                session_id=session.session_id,
                 filename=filename,
                 file_type=fileType,
                 file_size_mb=fileSizeMb,
             )
-            db.add(aiDocument)
+            db.add(ai_doc)
             db.commit()
-        else:
-            # Safety: should never happen, but keep system stable
-            session.session_id = aiDocument.session_id
 
-        # --------------------------------------------------
-        # 3️⃣ EXTRACT + CHUNK FILE
-        # --------------------------------------------------
+        pages: List[tuple] = []
+
         for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
             if not rawText or not rawText.strip():
                 continue
 
-            ocrUsed = ocrUsed or usedOcr
+            ocrUsed |= usedOcr
+            pages.append((pageNumber, rawText))
 
-            for chunk in chunkText(rawText):
-                db.add(
-                    DocumentChunk(
-                        id=uuid.uuid4(),
-                        document_id=documentId,
-                        session_id=aiDocument.session_id,  # 🔒 SAME SESSION
-                        chunk_index=chunksCreated,
-                        chunk_text=chunk,
-                        page_number=pageNumber,
-                    )
-                )
-                chunksCreated += 1
-
-        db.commit()
+        if not pages:
+            return {
+                "status": "processing",
+                "message": "No readable text extracted",
+            }
+        chunksCreated = createDocumentChunks(
+            db=db,
+            ai_document_id=ai_doc.id,          # 🔑 ai_documents.id
+            session_id=str(ai_doc.session_id),
+            pages=pages,
+        )
 
         return {
+            "status": "success",
+            "document_id": document_id,
+            "session_id": str(ai_doc.session_id),
             "chunks": chunksCreated,
             "ocr_used": ocrUsed,
+            "file_size_mb": round(fileSizeMb, 2),
         }
 
-    except Exception:
+    except Exception as exc:
         db.rollback()
         logger.exception("Document ingestion failed")
-        raise
+        raise exc
 
     finally:
         db.close()
-
 
 # ======================================================
 # DOCUMENT SAVE / SUBMIT

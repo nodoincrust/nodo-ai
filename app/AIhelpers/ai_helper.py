@@ -5,22 +5,22 @@ from app.services.summary_service import summarizeDocument
 from app.services.ai_DBservice import getOrCreateSessionForDocument
 
 
-def handleChat(*, documentId: int, query: str) -> dict:
+def handleChat(*, document_id: int, query: str) -> dict:
     """
     Handle a chat request for a document.
     """
-    sessionId = getOrCreateSessionForDocument(documentId)
+    sessionId = getOrCreateSessionForDocument(document_id)
 
     return chatWithDocument(
-        documentId=documentId,
+        document_id=document_id,
         sessionId=sessionId,
         query=query,
     )
 
 
-def handleChatStream(*, documentId: int, query: str) -> Generator[str, None, None]:
+def handleChatStream(*, document_id: int, query: str) -> Generator[str, None, None]:
     
-    sessionId = getOrCreateSessionForDocument(documentId)
+    sessionId = getOrCreateSessionForDocument(document_id)
 
     # Placeholder: implement streaming version later if needed
     raise NotImplementedError("Streaming chat is not implemented yet")
@@ -28,17 +28,17 @@ def handleChatStream(*, documentId: int, query: str) -> Generator[str, None, Non
 
 def handleChatWithCitation(
     *,
-    documentId: int,
+    document_id: int,
     query: str,
 ) -> dict:
-    sessionId = getOrCreateSessionForDocument(documentId)
+    sessionId = getOrCreateSessionForDocument(document_id)
 
     return chatWithDocument(
-        documentId=documentId,
+        document_id=document_id,
         sessionId=sessionId,
         query=query,
     )
 
 
-def handleSummary(*, documentId: int) -> dict:
-    return summarizeDocument(documentId)
+def handleSummary(*, document_id: int) -> dict:
+    return summarizeDocument(document_id)

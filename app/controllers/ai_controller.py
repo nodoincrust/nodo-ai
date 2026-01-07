@@ -128,9 +128,24 @@ async def chatApi(*, documentId: int, query: str):
     }
 
 
-@router.get("/summary/{documentId}")
-def summarizeApi(documentId: int):
+# @router.get("/summary/{documentId}")
+# def summarizeApi(documentId: int):
 
+#     getOrCreateSessionForDocument(documentId)
+
+#     return summarizeDocument(documentId)
+
+from fastapi.concurrency import run_in_threadpool
+
+@router.get("/summary/{documentId}")
+async def summarizeApi(documentId: int):
+    # ensure session exists
     getOrCreateSessionForDocument(documentId)
 
-    return summarizeDocument(documentId)
+    # 🔥 RUN IN WORKER THREAD, WAIT FOR RESULT
+    result = await run_in_threadpool(
+        summarizeDocument,
+        documentId,
+    )
+
+    return result

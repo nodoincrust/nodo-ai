@@ -217,12 +217,14 @@ class GetCompaniesRequest(BaseModel):
     page: int = 1
     pagelimit: int = 10
     search: Optional[str] = None
+    status: Optional[str] = None
 
 
 class getDepartments(BaseModel):
     page: int = 1
     pagelimit: int = 10
     search: Optional[str] = None
+    status: Optional[str] = None 
 
 class getDepartmentList(BaseModel):
     search:Optional[str]=None
@@ -235,6 +237,7 @@ class GetEmployee(BaseModel):
     page: int = 1
     pagelimit: int = 10
     search: Optional[str] = None
+    status:Optional[str]=None
 
 class GetEmployeeList(BaseModel):
     search:Optional[str]=None

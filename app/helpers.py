@@ -194,3 +194,11 @@ def resolve_hierarchy(db: Session, current_user: dict):
 def company_admin_guard(user: dict):
     if user["role"] != UserRole.COMPANY_ADMIN.value:
         raise HTTPException(status_code=403, detail="Unauthorized access")
+
+
+def get_hierarchy_order(user: User, is_department_head: bool) -> int:
+    if user.role == UserRole.COMPANY_ADMIN:
+        return 3
+    if is_department_head:
+        return 2
+    return 1

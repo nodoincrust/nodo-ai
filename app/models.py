@@ -238,7 +238,6 @@ class AIDocument(Base):
     created_at = Column(DateTime, server_default=func.now())
  
     document = relationship("Document", back_populates="ai_document")
- 
     chunks = relationship(
         "DocumentChunk",
         back_populates="ai_document",

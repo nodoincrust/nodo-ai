@@ -35,7 +35,21 @@ def add_dept_service(payload: CreateDepartmentSchema, db: Session, current_user:
                 raise HTTPException(
                     status_code=400, detail="Invalid department head user"
                 )
-
+        existing_dept=(
+            db.query(Department)
+            .filter(
+                Department.company_id==current_user["company_id"],
+                Department.is_delete.is_(False),
+                Department.name.ilike(payload.name.strip()),
+                
+            ).first()
+        )
+        if existing_dept:
+            raise HTTPException(
+                status_code=409,
+                detail="Department with this name is already exist!"
+            )
+        
         department = Department(
             company_id=current_user["company_id"],
             name=payload.name,
@@ -73,7 +87,7 @@ def add_dept_service(payload: CreateDepartmentSchema, db: Session, current_user:
 
 
 def get_dept_list(
-    db: Session, current_user: dict, page: int, size: int, search: str | None = None
+    db: Session, current_user: dict, page: int, size: int, search: str | None = None,status:str | None=None
 ):
     offset = (page - 1) * size
 
@@ -95,6 +109,12 @@ def get_dept_list(
                 func.lower(User.email).like(search_term),
             )
         )
+    if status:
+        if status.lower()=="active":
+         base_query=base_query.filter(Department.is_active.is_(True))
+        elif status.lower()=="inactive":
+         base_query=base_query.filter(Department.is_active.is_(False))
+        
 
     total = base_query.count()
 
@@ -540,6 +560,7 @@ def get_employee_list(
     page: int,
     size: int,
     query: str | None = None,
+    status:str | None = None
 ):
     page = max(page, 1)
     size = max(size, 1)
@@ -579,6 +600,11 @@ def get_employee_list(
                     User.email.ilike(search),
                 )
             )
+    if status:
+        if status.lower()=="active":
+            base_query=base_query.filter(User.is_active.is_(True))
+        elif status.lower()=="inactive":
+            base_query=base_query.filter(User.is_active.is_(False))
 
     total = base_query.order_by(None).count()
 

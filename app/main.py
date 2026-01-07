@@ -2,9 +2,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Response , Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import time
 
 from app.controllers.Admincontroller import router as parentRoute
 from app.controllers.CompanyController import router as deptRoute
@@ -23,13 +24,34 @@ from app.exception_handler import (
 
 app = FastAPI()
 
+# @app.middleware("http")
+# async def request_timing_logger(request: Request, call_next):
+#     start = time.time()
+
+#     print(f"➡️  INCOMING {request.method} {request.url.path}")
+
+#     response = await call_next(request)
+
+#     duration = (time.time() - start) * 1000
+#     print(f"⬅️  COMPLETED {request.method} {request.url.path} in {duration:.2f} ms")
+
+#     return response
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["http://localhost:5173",
+        "http://127.0.0.1:5173",],        # or specific frontend URLs
+    allow_credentials=False,    # MUST be False with "*"
     allow_methods=["*"],
     allow_headers=["*"],
+    # max_age=86400,
 )
+
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str, request: Request):
+    return Response(status_code=200)
+
+
 app.include_router(parentRoute)
 app.include_router(deptRoute)
 app.include_router(ai_router)

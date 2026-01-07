@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException,BackgroundTasks
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
@@ -24,6 +24,7 @@ def greet():
 
 @router.post("/upload")
 async def uploadDocument(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
@@ -50,22 +51,29 @@ async def uploadDocument(
     businessDocumentId = result["document_id"]
     permanentPath = result["file_path"]
 
-    try:
-        aiResult = processDocument(
-            filePath=permanentPath,
-            documentId=businessDocumentId,
-            filename=file.filename,
-            fileType=file.content_type,
-            fileSizeMb=fileSizeMb,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="AI processing failed")
-
+    # try:
+    #     aiResult = processDocument(
+    #         filePath=permanentPath,
+    #         documentId=businessDocumentId,
+    #         filename=file.filename,
+    #         fileType=file.content_type,
+    #         fileSizeMb=fileSizeMb,
+    #     )
+    # except Exception as exc:
+    #     raise HTTPException(status_code=500, detail="AI processing failed")
+    
+    background_tasks.add_task(
+        processDocument,
+        filePath=permanentPath,
+        documentId=businessDocumentId,
+        filename=file.filename,
+        fileType=file.content_type,
+        fileSizeMb=fileSizeMb,
+    )
     return {
         "status": "success",
         "documentId": businessDocumentId,
-        "chunks": aiResult.get("chunks"),
-        "ocrUsed": aiResult.get("ocr_used"),
+        "filepath":permanentPath,
         "fileSizeMb": round(fileSizeMb, 2),
     }
 
@@ -77,6 +85,8 @@ def saveDocumentApi(
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
+    print("Summery:-",payload.summary)
+    print("Tags:-",payload.tags)
     result = saveDocument(
         db=db,
         documentId=documentId,

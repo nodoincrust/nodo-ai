@@ -247,6 +247,7 @@ def list_companies_service(
     page: int = 1,
     size: int = 10,
     search: str | None = None,
+    status:str | None = None
 ):
     offset = (page - 1) * size
 
@@ -263,6 +264,11 @@ def list_companies_service(
                 Company.contact_email.ilike(search_term),
             )
         )
+    if status:
+        if status.lower()=="active":
+            base_query=base_query.filter(Company.is_active.is_(True))
+        elif status.lower()=="inactive":
+            base_query=base_query.filter(Company.is_active.is_(False))
 
     total = base_query.count()
 

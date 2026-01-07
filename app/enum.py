@@ -55,4 +55,13 @@ SIDEBAR_MENU = {
         {"key": "dashboard", "label": "Dashboard", "path": "/dashboard"},
         {"key": "my_docs", "label": "My Documents", "path": "/documents/my"},
     ],
+    
+    
+}
+
+
+ROLE_ORDER = {
+    UserRole.EMPLOYEE: 1,
+    UserRole.DEPARTMENT_HEAD: 2,
+    UserRole.COMPANY_ADMIN: 3,
 }

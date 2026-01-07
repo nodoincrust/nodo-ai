@@ -63,6 +63,7 @@ def list_departments(
         page=payload.page,
         size=payload.pagelimit,
         search=payload.search,
+        status=payload.status,
     )
 
 @router.post("/getDepartmentList")
@@ -142,7 +143,7 @@ def update_employee(
     return update_employee_service(employee_id, payload, db, current_user)
 
 
-@router.delete("/employees/{empId}")
+@router.delete("/deleteEmployee/{empId}")
 def delete_employee(
     empId: int,
     current_user=Depends(get_current_user),
@@ -176,6 +177,7 @@ def list_employees(
         page=payload.page,
         size=payload.pagelimit,
         query=payload.search,
+        status=payload.status
     )
 @router.post("/getEmployeeList")
 def get_list_employees(

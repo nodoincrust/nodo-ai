@@ -3,7 +3,7 @@ from fastapi import HTTPException
 
 from sqlalchemy import or_, cast
 
-from app.enum import UserRole
+from app.enum import UserRole,ROLE_ORDER
 from sqlalchemy.dialects.postgresql import TEXT
 from app.models import DocumentVersion, Document, User, Department, DocumentApprovalStep
 
@@ -99,7 +99,7 @@ def get_assignable_users(db: Session, current_user: dict):
         User.id != user_id,
     )
 
-    users = []
+    dept = None
 
     if role == UserRole.COMPANY_ADMIN:
         users = base_users.all()
@@ -132,21 +132,32 @@ def get_assignable_users(db: Session, current_user: dict):
             )
         ).all()
 
+    data = []
+
+    for u in users:
+        is_dept_head = (
+            dept is not None and u.id == dept.head_user_id
+        )
+
+        effective_role = (
+            UserRole.COMPANY_ADMIN
+            if u.role == UserRole.COMPANY_ADMIN
+            else UserRole.DEPARTMENT_HEAD
+            if is_dept_head
+            else UserRole.EMPLOYEE
+        )
+
+        data.append({
+            "user_id": u.id,
+            "name": u.name,
+            "role": u.role,  # real role
+            "is_department_head": is_dept_head,
+            "order": ROLE_ORDER[effective_role],  # ✅ correct hierarchy
+        })
+
     return {
         "status": 200,
-        "data": [
-            {
-                "user_id": u.id,
-                "name": u.name,
-                "role": u.role,
-                "is_department_head": (
-                    u.id == dept.head_user_id
-                    if role == UserRole.EMPLOYEE
-                    else u.role == UserRole.DEPARTMENT_HEAD
-                ),
-            }
-            for u in users
-        ],
+        "data": sorted(data, key=lambda x: x["order"]),
     }
 
 

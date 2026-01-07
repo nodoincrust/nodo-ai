@@ -81,7 +81,7 @@ def processDocument(
             if not rawText or not rawText.strip():
                 continue
 
-            ocrUsed = ocrUsed or usedOcr
+            ocrUsed |= usedOcr
 
             for chunk in chunkText(rawText):
                 db.add(
@@ -101,6 +101,7 @@ def processDocument(
         return {
             "chunks": chunksCreated,
             "ocr_used": ocrUsed,
+            "session_id":str(aiDocument.session_id)
         }
 
     except Exception:
@@ -153,7 +154,22 @@ def saveDocument(
     if payload.tags is not None:
         version.tags = payload.tags
 
-    document.status = "SUBMITTED"
+    ai_document = (
+        db.query(AIDocument)
+        .filter(AIDocument.document_id == document.id)
+        .first()
+     )
+
+    if not ai_document:
+        raise HTTPException(500, "AI document not found")
+
+    if payload.summary is not None:
+        ai_document.summary = DocumentSummary(
+        summary_text=payload.summary,
+        tags=payload.tags or [],
+        citations=[],
+    )
+
 
     review = DocumentReview(
         document_id=document.id,
@@ -238,7 +254,6 @@ def createDocumentDraft(
         "file_path": permanentPath,
     }
 
-
 def get_document_full_details(
     db: Session,
     *,
@@ -267,16 +282,12 @@ def get_document_full_details(
     )
 
     ai_document = (
-        db.query(AIDocument).filter(AIDocument.document_id == document.id).first()
+        db.query(AIDocument)
+        .filter(AIDocument.document_id == document.id)
+        .first()
     )
 
-    summary = None
-    if ai_document:
-        summary = (
-            db.query(DocumentSummary)
-            .filter(DocumentSummary.ai_document_id == ai_document.id)
-            .first()
-        )
+    summary = ai_document.summary if ai_document else None
 
     review = (
         db.query(DocumentReview)
@@ -296,17 +307,16 @@ def get_document_full_details(
             "department_id": document.department_id,
             "company_id": document.company_id,
         },
-       "file": {
-    "file_name": version.file_name if version else None,
-    "file_path": (
-        "/" + version.file_path.replace("\\", "/").lstrip("/")
-        if version
-        else None
-    ),
-    "file_size_bytes": version.file_size_bytes if version else None,
-    "version_number": version.version_number if version else None,
-}
-,
+        "file": {
+            "file_name": version.file_name if version else None,
+            "file_path": (
+                "/" + version.file_path.replace("\\", "/").lstrip("/")
+                if version
+                else None
+            ),
+            "file_size_bytes": version.file_size_bytes if version else None,
+            "version_number": version.version_number if version else None,
+        },
         "ai": {
             "ai_document_id": ai_document.id if ai_document else None,
             "session_id": str(ai_document.session_id) if ai_document else None,
@@ -319,8 +329,8 @@ def get_document_full_details(
         },
         "summary": {
             "text": summary.summary_text if summary else None,
-            "tags": summary.tags if summary else [],
-            "citations": summary.citations if summary else [],
+            "tags": summary.tags or [] if summary else [],
+            "citations": summary.citations or [] if summary else [],
         },
         "review": {
             "status": review.status if review else None,

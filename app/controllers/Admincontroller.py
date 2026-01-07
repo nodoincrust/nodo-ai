@@ -76,6 +76,7 @@ def companiesList(
         page=payload.page,
         size=payload.pagelimit,
         search=payload.search,
+        status=payload.status
     )
 
 

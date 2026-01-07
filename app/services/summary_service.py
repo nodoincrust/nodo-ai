@@ -2,68 +2,67 @@ import logging
 import json
 import re
 from sqlalchemy.orm import Session
-
+ 
 from app.db import SessionLocal
-from app.models import (
-    DocumentChunk,
-    DocumentSummary,
-    AIDocument,
-)
+from app.models import DocumentChunk,DocumentSummary, AIDocument
+from app.services.TagServices import getDocumentTags
 from app.AIhelpers.llm_helper import askLlm
-
+ 
 logger = logging.getLogger("ai.summaryService")
-
+ 
 # ==============================
 # CONFIG
 # ==============================
-
-SUMMARY_TOP_K = 15
-MAX_CONTEXT_CHARS = 12000
-
+ 
+SUMMARY_TOP_K = 12
+MAX_CONTEXT_CHARS = 7000
+ 
 BASE_SYSTEM_PROMPT = """
-You are an enterprise document intelligence system. 
-
+You are an enterprise document intelligence system.
 STRICT RULES:
 - Return ONLY valid JSON.
 - NO markdown code blocks.
-- The summary MUST be detailed, between 15 to 20 lines in length excluding the tags and citation.
-
+- The summary MUST be detailed, between 10 to 15 lines in length excluding the tags and citation.
+ 
 FORMATTING RULES:
 1. Start with a comprehensive 3-5 sentence overview.
 2. Provide a section titled "Detailed Breakdown" with specific points.
 3. Provide a section titled "Key Insights & Implications".
 4. Citations MUST ONLY contain the page_number (no excerpts).
-
-OUTPUT FORMAT:
+ 
+First plan the structure silently, then output the final JSON.
+ 
+OUTPUT FORMAT (MANDATORY):
+You MUST return ALL fields below.
+If unsure, return empty arrays — NEVER omit fields.
+ 
 {
-  "summary": "Overview text...\\n\\nDetailed Breakdown\\n- Point 1...\\n- Point 2...\\n\\nKey Insights & Implications\\n- Insight 1...",
-  "tags": ["tag1", "tag2"],
-  "citations": [{"page_number": 1}]
+  "summary": "string (required)",
+  "tags": ["string", "string"] (required, may be empty),
+  "citations": [{"page_number": number}] (required, may be empty)
 }
 """
-
+ 
 REFINEMENT_PROMPT = """
 You are an expert editor. You are provided with a DOCUMENT and a PREVIOUS SUMMARY.
-
 TASK:
-- Refine and expand the previous summary.
+Refine and expand the previous summary.
 - Integrate new details found in the document context.
-- Ensure the final output is 15-20 lines long excluding the tags and citation.
+- Ensure the final output is 10-15 lines long excluding the tags and citation.
 - Improve clarity and professional tone.
 - Keep the same JSON structure.
 """
-
+ 
 # ==============================
 # SAFE JSON PARSER
 # ==============================
-
+ 
 def safeJsonParse(raw: str) -> dict:
     if not raw:
         return {"summary": "", "tags": [], "citations": []}
-
-    # remove control chars
+ 
     cleanRaw = re.sub(r"[\x00-\x1F\x7F]", "", raw)
-
+ 
     try:
         data = json.loads(cleanRaw, strict=False)
     except Exception:
@@ -76,148 +75,151 @@ def safeJsonParse(raw: str) -> dict:
                 return {"summary": cleanRaw, "tags": [], "citations": []}
         else:
             return {"summary": cleanRaw, "tags": [], "citations": []}
-
+ 
     summaryText = data.get("summary", "")
     tags = list(set(map(str, data.get("tags", []))))
     citations = []
-
+ 
     seenPages = set()
     for c in data.get("citations", []):
         page = c.get("page_number") if isinstance(c, dict) else c
         if page and page not in seenPages:
             citations.append({"page_number": page})
             seenPages.add(page)
-
+ 
     return {
         "summary": summaryText.strip(),
         "tags": tags,
         "citations": citations,
     }
-
+    if "tags" not in parsed or not isinstance(parsed["tags"], list):
+        parsed["tags"] = []
+ 
+    if "citations" not in parsed or not isinstance(parsed["citations"], list):
+        parsed["citations"] = []
+ 
+ 
 # ==============================
-# MAIN SUMMARY SERVICE
+# MAIN SUMMARY API
 # ==============================
-
+ 
 def summarizeDocument(documentId: int) -> dict:
-    """
-    Generate or refine summary for a document.
-
-    Rules:
-    - Uses ai_documents.id internally
-    - One LLM call per request
-    - Idempotent (updates existing summary)
-    """
     db: Session = SessionLocal()
-
     try:
         # --------------------------------------------------
-        # 1️⃣ Resolve AI document (CRITICAL)
+        # 1️⃣ Resolve AI document
         # --------------------------------------------------
-        aiDocument = (
+        ai_doc = (
             db.query(AIDocument)
             .filter(AIDocument.document_id == documentId)
             .first()
         )
-
-        if not aiDocument:
+ 
+        if not ai_doc:
             return {
-                "status": "error",
-                "message": "AI document not found",
+                "status": "processing",
+                "message": "Document ingestion not completed yet",
             }
-
+ 
+        ai_document_id = ai_doc.id
+ 
         # --------------------------------------------------
-        # 2️⃣ Fetch existing summary (if any)
-        # --------------------------------------------------
-        existingSummary = (
-            db.query(DocumentSummary)
-            .filter_by(ai_document_id=aiDocument.id)
-            .first()
-        )
-
-        # --------------------------------------------------
-        # 3️⃣ Fetch chunks for summarization
+        # 2️⃣ Fetch TOP-K chunks (CPU optimized)
         # --------------------------------------------------
         chunks = (
             db.query(DocumentChunk)
-            .filter_by(ai_document_id=aiDocument.id)
+            .filter(DocumentChunk.ai_document_id == ai_document_id)
             .order_by(DocumentChunk.chunk_index)
             .limit(SUMMARY_TOP_K)
             .all()
         )
-
+ 
         if not chunks:
             return {
-                "status": "error",
-                "message": "No content found for summarization",
+                "status": "processing",
+                "message": "Chunks not ready yet",
             }
-
-        documentContext = "\n\n".join(
-            f"[PAGE {c.page_number}] {c.chunk_text}"
-            for c in chunks
-        )[:MAX_CONTEXT_CHARS]
-
+ 
         # --------------------------------------------------
-        # 4️⃣ Decide prompt mode
+        # 3️⃣ Build document excerpt context
         # --------------------------------------------------
-        if existingSummary and existingSummary.summary_text:
-            systemPrompt = BASE_SYSTEM_PROMPT + "\n" + REFINEMENT_PROMPT
-            userPrompt = (
-                f"DOCUMENT:\n{documentContext}\n\n"
-                f"PREVIOUS SUMMARY:\n{existingSummary.summary_text}"
+        chunk_parts = []
+        default_citations = []
+ 
+        for chunk in chunks:
+            chunk_parts.append(
+                f"[PAGE {chunk.page_number}] {chunk.chunk_text}"
             )
-            refined = True
-        else:
-            systemPrompt = BASE_SYSTEM_PROMPT
-            userPrompt = f"DOCUMENT:\n{documentContext}"
-            refined = False
-
+            default_citations.append({"page_number": chunk.page_number})
+ 
+        document_context = "\n\n".join(chunk_parts)[:MAX_CONTEXT_CHARS]
+ 
         # --------------------------------------------------
-        # 5️⃣ LLM call
+        # 4️⃣ Fetch previous summary (KEY OPTIMIZATION)
         # --------------------------------------------------
-        llmResult = askLlm(
-            context=systemPrompt,
-            question=userPrompt,
+        existing = (
+            db.query(DocumentSummary)
+            .filter(DocumentSummary.ai_document_id == ai_document_id)
+            .first()
         )
-
-        parsed = safeJsonParse(llmResult["data"]["answer"])
-
-        # --------------------------------------------------
-        # 6️⃣ Persist summary
-        # --------------------------------------------------
-        if existingSummary:
-            existingSummary.summary_text = parsed["summary"]
-            existingSummary.tags = parsed["tags"]
-            existingSummary.citations = parsed["citations"]
+ 
+        previous_summary = existing.summary_text if existing else ""
+        llm_context = (
+            f"{BASE_SYSTEM_PROMPT}\n\n"
+            f"PREVIOUS SUMMARY:\n{previous_summary}\n\n"
+            f"DOCUMENT EXCERPTS:\n{document_context}"
+        )
+ 
+        llm_result = askLlm(
+            context=llm_context,
+            question="Regenerate the summary using the provided content.",
+        )
+ 
+        parsed = safeJsonParse(llm_result["data"]["answer"])
+ 
+        summary_text = parsed.get("summary", "").strip()
+        tags = parsed.get("tags", [])
+        citations = parsed.get("citations", default_citations)
+ 
+        if not summary_text:
+            return {
+                "status": "error",
+                "message": "Summary generation failed",
+            }
+ 
+        # Normalize tags
+        tags = [
+            str(t).strip().title()
+            for t in tags
+            if isinstance(t, str) and 2 <= len(t.strip()) <= 30
+        ]
+        tags = list(dict.fromkeys(tags))[:6]
+ 
+    
+        if existing:
+            existing.summary_text = summary_text
+            existing.tags = tags
+            existing.citations = citations
         else:
             db.add(
                 DocumentSummary(
-                    ai_document_id=aiDocument.id,
-                    summary_text=parsed["summary"],
-                    tags=parsed["tags"],
-                    citations=parsed["citations"],
+                    ai_document_id=ai_document_id,
+                    summary_text=summary_text,
+                    tags=tags,
+                    citations=citations,
                 )
             )
-
+ 
         db.commit()
-
-        # --------------------------------------------------
-        # 7️⃣ Response
-        # --------------------------------------------------
+ 
         return {
             "status": "success",
-            "refined": refined,
-            "summary": parsed["summary"],
-            "tags": parsed["tags"],
-            "citations": parsed["citations"],
+            "refined": True,
+            "summary": summary_text,
+            "tags": tags,
+            "citations": citations,
         }
-
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Summary generation failed")
-        return {
-            "status": "error",
-            "message": str(exc),
-        }
-
+ 
     finally:
         db.close()
+ 

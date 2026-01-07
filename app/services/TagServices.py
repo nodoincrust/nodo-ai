@@ -2,7 +2,7 @@ import logging
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.models import DocuemntSummery
+from app.models import DocumentSummary
 
 logger = logging.getLogger("ai.tagService")
 
@@ -17,7 +17,7 @@ def getDocumentTags(
     READ-ONLY service.
     """
     record = (
-        db.query(DocuemntSummery)
+        db.query(DocumentSummary)
         .filter_by(document_id=documentId)
         .first()
     )

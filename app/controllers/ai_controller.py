@@ -11,12 +11,19 @@ from fastapi import (
     Depends,
 )
 from app.db import SessionLocal
-from app.helpers import get_current_user
+from app.helpers import get_current_user,run_summary_job
 from app.models import Document
 from app.services.document_service import processDocument, createDocumentDraft
 from app.services.chat_service import chatWithDocument
 from app.services.summary_service import summarizeDocument
 from app.services.ai_DBservice import getOrCreateSessionForDocument
+
+
+from fastapi.concurrency import run_in_threadpool
+from uuid import uuid4
+from threading import Thread
+
+from jobs_store import jobs
 
 ASYNC_THRESHOLD_MB = 2.0
 
@@ -100,33 +107,34 @@ async def uploadDocument(
         except Exception:
             pass
 
-
-@router.post("/chat")
-async def chatApi(*, documentId: int, query: str):
-    """
-    Document-anchored chat.
-
-    - Same document → same session
-    - Exactly ONE LLM call
-    """
-    if not documentId:
-        raise HTTPException(status_code=400, detail="documentId is required")
-
-    sessionId = getOrCreateSessionForDocument(documentId)
-
+# chat api endpoint
+@router.get("/chat")
+async def chatApi(
+    *,
+    document_id: int,
+    query: str,
+):
+    if not document_id:
+        raise HTTPException(status_code=400, detail="document_id is required")
+   
+    # ensure session exists for document
+    session_id = getOrCreateSessionForDocument(document_id)
+ 
+    #Calls chat pipeline that retrieves context, calls the LLM and returns the answer
     result = chatWithDocument(
-        documentId=documentId,
-        sessionId=sessionId,
+        document_id=document_id,
+        session_id=session_id,
         query=query,
     )
-
+ 
     return {
-        "documentId": documentId,
-        "sessionId": sessionId,
+        "document_id": document_id,
+        "session_id": session_id,
         "answer": result["answer"],
         "citations": result.get("citations", []),
     }
-
+ 
+ 
 
 # @router.get("/summary/{documentId}")
 # def summarizeApi(documentId: int):
@@ -135,17 +143,28 @@ async def chatApi(*, documentId: int, query: str):
 
 #     return summarizeDocument(documentId)
 
-from fastapi.concurrency import run_in_threadpool
 
-@router.get("/summary/{documentId}")
-async def summarizeApi(documentId: int):
+@router.post("/summary/start/{documentId}")
+def start_summary(documentId: int):
+    job_id = uuid4().hex
+    jobs[job_id] = {"status": "running", "result": None}
+
     # ensure session exists
     getOrCreateSessionForDocument(documentId)
 
-    #  RUN IN WORKER THREAD, WAIT FOR RESULT
-    result = await run_in_threadpool(
-        summarizeDocument,
-        documentId,
-    )
+    thread = Thread(target=run_summary_job, args=(job_id, documentId), daemon=True)
+    thread.start()
 
-    return result
+    return {"job_id": job_id}
+
+
+@router.get("/summary/status/{job_id}")
+def get_status(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return {"status": "not_found"}
+    
+    return {
+        "job_id": job_id,
+        **job
+    }

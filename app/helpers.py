@@ -10,6 +10,8 @@ from app.enum import UserRole, ROLE_LEVEL
 from app.models import Department, User
 from sqlalchemy.orm import Session
 from app.db import SessionLocal
+from app.services.summary_service import summarizeDocument
+from jobs_store import jobs
 
 
 def get_db():
@@ -202,3 +204,10 @@ def get_hierarchy_order(user: User, is_department_head: bool) -> int:
     if is_department_head:
         return 2
     return 1
+
+def run_summary_job(job_id: str, documentId: int):
+    try:
+        result = summarizeDocument(documentId)
+        jobs[job_id] = {"status": "done", "result": result}
+    except Exception as e:
+        jobs[job_id] = {"status": "error", "error": str(e)}

@@ -10,6 +10,7 @@ logger = logging.getLogger("ai.summaryService")
 
 SUMMARY_TOP_K = 12
 MAX_CONTEXT_CHARS = 7000
+jobs={}
 
 BASE_SYSTEM_PROMPT = """
 You are an enterprise document intelligence system.

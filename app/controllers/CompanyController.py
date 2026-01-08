@@ -8,9 +8,10 @@ from app.schemas import (
     UpdateDeptStatusSchema,
     CreateEmployeeSchema,
     UpdateEmployeeSchema,
-    UpdateEmployeeStatusSchema,
     getDepartments,
-    GetEmployee,getDepartmentList,GetEmployeeList
+    GetEmployee,
+    getDepartmentList,
+    GetEmployeeList,
 )
 from app.services.Companyservice import (
     add_dept_service,
@@ -18,12 +19,12 @@ from app.services.Companyservice import (
     update_dept_details,
     updateStatusDept,
     delete_department_details,
-    search_depts,
     add_employee_service,
     update_employee_service,
     delete_employee_details,
-    updateStatusEmployee,
-    get_employee_list,get_list_department,get_all_employees
+    get_employee_list,
+    get_list_department,
+    get_all_employees,
 )
 
 router = APIRouter(prefix="/nodo/company")
@@ -66,14 +67,16 @@ def list_departments(
         status=payload.status,
     )
 
+
 @router.post("/getDepartmentList")
 def get_list_departments(
-    payload:getDepartmentList,
+    payload: getDepartmentList,
     current_user=Depends(get_current_user),
-    db:Session=Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     company_admin_guard(current_user)
-    return get_list_department(db,current_user,search=payload.search)
+    return get_list_department(db, current_user, search=payload.search)
+
 
 @router.put("/updateDepartment/{deptId}")
 def update_department(
@@ -105,18 +108,6 @@ def delete_department(
 ):
     company_admin_guard(current_user)
     return delete_department_details(deptId, db, current_user)
-
-
-@router.get("/departments/search")
-def search_departments(
-    query: str | None = Query(default=None, min_length=1),
-    page: int = 1,
-    size: int = 10,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    company_admin_guard(current_user)
-    return search_depts(query, page, size, db, current_user)
 
 
 # -------------------- EMPLOYEES --------------------
@@ -153,17 +144,6 @@ def delete_employee(
     return delete_employee_details(empId, db, current_user)
 
 
-@router.put("/employees/{empId}/status")
-def update_employee_status(
-    empId: int,
-    payload: UpdateEmployeeStatusSchema,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    employee_manage_guard(current_user)
-    return updateStatusEmployee(empId, payload.is_active, db, current_user)
-
-
 @router.post("/getEmployees")
 def list_employees(
     payload: GetEmployee,
@@ -177,13 +157,15 @@ def list_employees(
         page=payload.page,
         size=payload.pagelimit,
         query=payload.search,
-        status=payload.status
+        status=payload.status,
     )
+
+
 @router.post("/getEmployeeList")
 def get_list_employees(
-    payload:GetEmployeeList,
+    payload: GetEmployeeList,
     current_user=Depends(get_current_user),
-    db:Session=Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     employee_manage_guard(current_user)
-    return get_all_employees(db,current_user,query=payload.search)
+    return get_all_employees(db, current_user, query=payload.search)

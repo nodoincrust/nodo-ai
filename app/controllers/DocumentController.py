@@ -1,12 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException,BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
 import os
-
 from app.helpers import get_db, get_current_user
 from app.schemas import DocumentSaveSchema
-
 from app.services.document_service import (
     processDocument,
     createDocumentDraft,
@@ -14,7 +12,7 @@ from app.services.document_service import (
     get_document_full_details,
 )
 
-router = APIRouter(prefix="/nodo/newdocuments", tags=["Documents"])
+router = APIRouter(prefix="/nodo/newdocuments")
 
 
 @router.get("/")
@@ -61,7 +59,7 @@ async def uploadDocument(
     #     )
     # except Exception as exc:
     #     raise HTTPException(status_code=500, detail="AI processing failed")
-    
+
     background_tasks.add_task(
         processDocument,
         filePath=permanentPath,
@@ -73,7 +71,7 @@ async def uploadDocument(
     return {
         "status": "success",
         "documentId": businessDocumentId,
-        "filepath":permanentPath,
+        "filepath": permanentPath,
         "fileSizeMb": round(fileSizeMb, 2),
     }
 
@@ -85,8 +83,6 @@ def saveDocumentApi(
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
-    print("Summery:-",payload.summary)
-    print("Tags:-",payload.tags)
     result = saveDocument(
         db=db,
         documentId=documentId,

@@ -247,7 +247,7 @@ def list_companies_service(
     page: int = 1,
     size: int = 10,
     search: str | None = None,
-    status:str | None = None
+    status: str | None = None,
 ):
     offset = (page - 1) * size
 
@@ -265,16 +265,31 @@ def list_companies_service(
             )
         )
     if status:
-        if status.lower()=="active":
-            base_query=base_query.filter(Company.is_active.is_(True))
-        elif status.lower()=="inactive":
-            base_query=base_query.filter(Company.is_active.is_(False))
+        if status.lower() == "active":
+            base_query = base_query.filter(Company.is_active.is_(True))
+        elif status.lower() == "inactive":
+            base_query = base_query.filter(Company.is_active.is_(False))
 
     total = base_query.count()
 
     companies = (
         base_query.order_by(Company.created_at.desc()).offset(offset).limit(size).all()
     )
+    company_list = []
+    for c in companies:
+        company_list.append(
+            {
+                "id": c.id,
+                "name": c.name,
+                "contact_email": c.contact_email,
+                "contact_person": c.contact_person,
+                "contact_number": c.contact_number,
+                "is_delete": c.is_delete,
+                "is_active": c.is_active,
+                "total_space": bytes_to_gb(c.total_space),
+                "remaining_space": bytes_to_gb(c.remaining_space),
+            }
+        )
 
     return {
         "statusCode": 200,
@@ -284,7 +299,7 @@ def list_companies_service(
         "page": page,
         "size": size,
         "total": total,
-        "data": companies,
+        "data": company_list,
     }
 
 
@@ -445,35 +460,3 @@ def update_company_details(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update company details")
-
-
-def search_companies(query, page, size, db, user):
-    offset = (page - 1) * size
-
-    base_query = db.query(Company).filter(
-        Company.is_delete.is_(False), Company.created_by == user["user_id"]
-    )
-
-    if query:
-        search = f"%{query.strip().lower()}%"
-        base_query = base_query.filter(
-            or_(
-                func.lower(Company.name).like(search),
-                func.lower(func.coalesce(Company.contact_person, "")).like(search),
-            )
-        )
-
-    total = base_query.count()
-
-    companies = (
-        base_query.order_by(Company.created_at.desc()).offset(offset).limit(size).all()
-    )
-
-    return {
-        "statusCode": 200,
-        "message": "Companies fetched successfully" if total else "No companies found",
-        "page": page,
-        "size": size,
-        "total": total,
-        "data": companies,
-    }

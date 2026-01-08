@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends
 from app.services.EmployeeService import (
     get_documents_service,
     get_assignable_users,
@@ -7,8 +7,8 @@ from app.services.EmployeeService import (
 from app.db import SessionLocal
 from app.schemas import DocumentAssignSchema
 from sqlalchemy.orm import Session
-from app.helpers import get_current_user, employee_manage_guard
-from app.enum import UserRole
+from app.helpers import get_current_user
+
 
 router = APIRouter(prefix="/nodo/employee")
 

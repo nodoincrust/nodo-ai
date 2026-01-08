@@ -20,9 +20,7 @@ def updateMemorySummary(
     if not messages:
         return
 
-    conversationText = "\n".join(
-        f"{m.role.upper()}: {m.content}" for m in messages
-    )
+    conversationText = "\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
 
     llmResult = askLlm(
         context="Summarize conversation memory.",
@@ -31,11 +29,7 @@ def updateMemorySummary(
 
     summaryText = llmResult["data"]["answer"]
 
-    existing = (
-        db.query(SessionMemorySummery)
-        .filter_by(session_id=sessionId)
-        .first()
-    )
+    existing = db.query(SessionMemorySummery).filter_by(session_id=sessionId).first()
 
     if existing:
         existing.summary = summaryText

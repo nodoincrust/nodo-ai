@@ -55,8 +55,6 @@ SIDEBAR_MENU = {
         {"key": "dashboard", "label": "Dashboard", "path": "/dashboard"},
         {"key": "my_docs", "label": "My Documents", "path": "/documents/my"},
     ],
-    
-    
 }
 
 

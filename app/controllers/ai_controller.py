@@ -142,7 +142,7 @@ async def summarizeApi(documentId: int):
     # ensure session exists
     getOrCreateSessionForDocument(documentId)
 
-    # 🔥 RUN IN WORKER THREAD, WAIT FOR RESULT
+    #  RUN IN WORKER THREAD, WAIT FOR RESULT
     result = await run_in_threadpool(
         summarizeDocument,
         documentId,

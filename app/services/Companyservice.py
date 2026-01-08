@@ -1,16 +1,12 @@
 from sqlalchemy.orm import Session, joinedload
-from datetime import datetime
-from fastapi import HTTPException, BackgroundTasks
-from jose import jwt
-import os
+from fastapi import HTTPException
 from sqlalchemy import or_, func
-from app.models import User, OTPLogin, Company, Department
+from app.models import User, Department
 from app.enum import UserRole
 from app.schemas import (
     CreateDepartmentSchema,
     UpdateDeptSchema,
     UpdateEmployeeSchema,
-    getDepartments,
 )
 from app.helpers import get_employee_scoped
 
@@ -35,21 +31,20 @@ def add_dept_service(payload: CreateDepartmentSchema, db: Session, current_user:
                 raise HTTPException(
                     status_code=400, detail="Invalid department head user"
                 )
-        existing_dept=(
+        existing_dept = (
             db.query(Department)
             .filter(
-                Department.company_id==current_user["company_id"],
+                Department.company_id == current_user["company_id"],
                 Department.is_delete.is_(False),
                 Department.name.ilike(payload.name.strip()),
-                
-            ).first()
+            )
+            .first()
         )
         if existing_dept:
             raise HTTPException(
-                status_code=409,
-                detail="Department with this name is already exist!"
+                status_code=409, detail="Department with this name is already exist!"
             )
-        
+
         department = Department(
             company_id=current_user["company_id"],
             name=payload.name,
@@ -59,9 +54,8 @@ def add_dept_service(payload: CreateDepartmentSchema, db: Session, current_user:
         )
 
         db.add(department)
-        db.flush()  # get department.id before commit
+        db.flush()
 
-        #  Mark user as department head (if applicable)
         if head_user:
             head_user.is_department_head = True
 
@@ -87,7 +81,12 @@ def add_dept_service(payload: CreateDepartmentSchema, db: Session, current_user:
 
 
 def get_dept_list(
-    db: Session, current_user: dict, page: int, size: int, search: str | None = None,status:str | None=None
+    db: Session,
+    current_user: dict,
+    page: int,
+    size: int,
+    search: str | None = None,
+    status: str | None = None,
 ):
     offset = (page - 1) * size
 
@@ -110,11 +109,10 @@ def get_dept_list(
             )
         )
     if status:
-        if status.lower()=="active":
-         base_query=base_query.filter(Department.is_active.is_(True))
-        elif status.lower()=="inactive":
-         base_query=base_query.filter(Department.is_active.is_(False))
-        
+        if status.lower() == "active":
+            base_query = base_query.filter(Department.is_active.is_(True))
+        elif status.lower() == "inactive":
+            base_query = base_query.filter(Department.is_active.is_(False))
 
     total = base_query.count()
 
@@ -149,8 +147,8 @@ def get_dept_list(
     }
 
 
-def get_list_department(db:Session,current_user:dict,search: str | None = None):
-    
+def get_list_department(db: Session, current_user: dict, search: str | None = None):
+
     base_query = (
         db.query(Department)
         .options(joinedload(Department.head))
@@ -170,11 +168,8 @@ def get_list_department(db:Session,current_user:dict,search: str | None = None):
         )
 
     total = base_query.count()
-    departments = (
-        base_query.order_by(Department.created_at.desc())
-        .all()
-    )
-    
+    departments = base_query.order_by(Department.created_at.desc()).all()
+
     return {
         "statusCode": 200,
         "message": (
@@ -195,6 +190,8 @@ def get_list_department(db:Session,current_user:dict,search: str | None = None):
             for d in departments
         ],
     }
+
+
 def updateStatusDept(deptId: int, is_active: bool, db: Session, current_user: dict):
 
     department = (
@@ -310,7 +307,7 @@ def update_dept_details(
 
         return {
             "statusCode": 200,
-            "message": "Department updated successfully",
+            "message": "Department details updated successfully",
             "data": {
                 "department_id": department.id,
                 "head_user_id": department.head_user_id,
@@ -321,21 +318,6 @@ def update_dept_details(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update department")
-
-
-def search_depts(query, page, size, db, user):
-
-    offset = (page - 1) * size
-
-    base_query = db.query(Department).filter(
-        Department.company_id == user["company_id"], Department.is_delete.is_(False)
-    )
-
-    if query:
-        search = f"%{query.strip().lower()}%"
-        base_query = base_query.filter(func.lower(Department.name).like(search))
-
-    return base_query.offset(offset).limit(size).all()
 
 
 def add_employee_service(payload, db: Session, current_user: dict):
@@ -433,7 +415,7 @@ def update_employee_service(
     if payload.name is not None:
         employee.name = payload.name
     if payload.is_active is not None:
-        employee.is_active=payload.is_active
+        employee.is_active = payload.is_active
 
     if payload.email is not None:
         email_exists = (
@@ -508,7 +490,7 @@ def update_employee_service(
 
         return {
             "statusCode": 200,
-            "message": "Employee updated successfully",
+            "message": "Employee details updated successfully",
             "data": {"id": employee.id, "name": employee.name, "email": employee.email},
         }
 
@@ -560,7 +542,7 @@ def get_employee_list(
     page: int,
     size: int,
     query: str | None = None,
-    status:str | None = None
+    status: str | None = None,
 ):
     page = max(page, 1)
     size = max(size, 1)
@@ -601,10 +583,10 @@ def get_employee_list(
                 )
             )
     if status:
-        if status.lower()=="active":
-            base_query=base_query.filter(User.is_active.is_(True))
-        elif status.lower()=="inactive":
-            base_query=base_query.filter(User.is_active.is_(False))
+        if status.lower() == "active":
+            base_query = base_query.filter(User.is_active.is_(True))
+        elif status.lower() == "inactive":
+            base_query = base_query.filter(User.is_active.is_(False))
 
     total = base_query.order_by(None).count()
 
@@ -625,7 +607,7 @@ def get_employee_list(
                 "email": e.email,
                 "is_active": e.is_active,
                 "department_id": e.department_id,
-                "department_name":e.department_name,
+                "department_name": e.department_name,
                 "role": e.designation,
             }
             for e in employees
@@ -633,8 +615,8 @@ def get_employee_list(
     }
 
 
-def get_all_employees(db:Session,current_user:dict,query: str | None = None):
-    
+def get_all_employees(db: Session, current_user: dict, query: str | None = None):
+
     base_query = db.query(
         User.id,
         User.name,
@@ -664,9 +646,7 @@ def get_all_employees(db:Session,current_user:dict,query: str | None = None):
 
     total = base_query.order_by(None).count()
 
-    employees = (
-        base_query.order_by(User.created_at.desc()).all()
-    )
+    employees = base_query.order_by(User.created_at.desc()).all()
 
     return {
         "statusCode": 200,

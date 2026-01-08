@@ -1,9 +1,7 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-
 from sqlalchemy import or_, cast
-
-from app.enum import UserRole,ROLE_ORDER
+from app.enum import UserRole, ROLE_ORDER
 from sqlalchemy.dialects.postgresql import TEXT
 from app.models import DocumentVersion, Document, User, Department, DocumentApprovalStep
 
@@ -34,11 +32,8 @@ def get_documents_service(
 
         query = query.filter(
             or_(
-                # Document name
                 DocumentVersion.file_name.ilike(search_pattern),
-                # Status (enum/string safe)
                 cast(Document.status, TEXT).ilike(search_pattern),
-                # Tags (JSONB)
                 DocumentVersion.tags.op("?")(search),
             )
         )
@@ -135,25 +130,23 @@ def get_assignable_users(db: Session, current_user: dict):
     data = []
 
     for u in users:
-        is_dept_head = (
-            dept is not None and u.id == dept.head_user_id
-        )
+        is_dept_head = dept is not None and u.id == dept.head_user_id
 
         effective_role = (
             UserRole.COMPANY_ADMIN
             if u.role == UserRole.COMPANY_ADMIN
-            else UserRole.DEPARTMENT_HEAD
-            if is_dept_head
-            else UserRole.EMPLOYEE
+            else UserRole.DEPARTMENT_HEAD if is_dept_head else UserRole.EMPLOYEE
         )
 
-        data.append({
-            "user_id": u.id,
-            "name": u.name,
-            "role": u.role,  # real role
-            "is_department_head": is_dept_head,
-            "order": ROLE_ORDER[effective_role],  # ✅ correct hierarchy
-        })
+        data.append(
+            {
+                "user_id": u.id,
+                "name": u.name,
+                "role": u.role,
+                "is_department_head": is_dept_head,
+                "order": ROLE_ORDER[effective_role],
+            }
+        )
 
     return {
         "status": 200,

@@ -16,11 +16,7 @@ def getDocumentTags(
     Fetch stored tags for a document.
     READ-ONLY service.
     """
-    record = (
-        db.query(DocumentSummary)
-        .filter_by(document_id=documentId)
-        .first()
-    )
+    record = db.query(DocumentSummary).filter_by(document_id=documentId).first()
 
     if not record or not record.tags:
         logger.info("No tags found for document %s", documentId)

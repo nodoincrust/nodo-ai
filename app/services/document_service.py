@@ -5,7 +5,6 @@ import os
 from typing import Dict
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-
 from app.db import SessionLocal
 from app.models import (
     Document,
@@ -58,7 +57,7 @@ def processDocument(
 
         session = ChatSession()
         db.add(session)
-        db.flush()  # generates UUID
+        db.flush()
 
         aiDocument = (
             db.query(AIDocument).filter(AIDocument.document_id == documentId).first()
@@ -101,7 +100,7 @@ def processDocument(
         return {
             "chunks": chunksCreated,
             "ocr_used": ocrUsed,
-            "session_id":str(aiDocument.session_id)
+            "session_id": str(aiDocument.session_id),
         }
 
     except Exception:
@@ -155,21 +154,18 @@ def saveDocument(
         version.tags = payload.tags
 
     ai_document = (
-        db.query(AIDocument)
-        .filter(AIDocument.document_id == document.id)
-        .first()
-     )
+        db.query(AIDocument).filter(AIDocument.document_id == document.id).first()
+    )
 
     if not ai_document:
         raise HTTPException(500, "AI document not found")
 
     if payload.summary is not None:
         ai_document.summary = DocumentSummary(
-        summary_text=payload.summary,
-        tags=payload.tags or [],
-        citations=[],
-    )
-
+            summary_text=payload.summary,
+            tags=payload.tags or [],
+            citations=[],
+        )
 
     review = DocumentReview(
         document_id=document.id,
@@ -254,6 +250,7 @@ def createDocumentDraft(
         "file_path": permanentPath,
     }
 
+
 def get_document_full_details(
     db: Session,
     *,
@@ -282,9 +279,7 @@ def get_document_full_details(
     )
 
     ai_document = (
-        db.query(AIDocument)
-        .filter(AIDocument.document_id == document.id)
-        .first()
+        db.query(AIDocument).filter(AIDocument.document_id == document.id).first()
     )
 
     summary = ai_document.summary if ai_document else None

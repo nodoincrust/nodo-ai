@@ -24,6 +24,7 @@ from pgvector.sqlalchemy import Vector
 from app.db import Base
 from app.enum import UserRole
 
+
 class User(Base):
     __tablename__ = "users"
 
@@ -185,7 +186,6 @@ class Document(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # 🔑 EXACTLY ONE AI DOCUMENT PER DOCUMENT
     ai_document = relationship(
         "AIDocument",
         back_populates="document",
@@ -193,9 +193,6 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
-# =====================================================
-# AI SESSION (CREATED ONLY VIA AIDocument)
-# =====================================================
 
 class ChatSession(Base):
     __tablename__ = "sessions"
@@ -209,41 +206,36 @@ class ChatSession(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-# =====================================================
-# AI DOCUMENT (ENFORCES ONE DOCUMENT → ONE SESSION)
-# =====================================================
 
 class AIDocument(Base):
     __tablename__ = "ai_documents"
- 
-    id=Column(BigInteger, primary_key=True)
- 
-    # 🔑 SAME AS documents.id (ONE-TO-ONE)
+
+    id = Column(BigInteger, primary_key=True)
+
     document_id = Column(
         BigInteger, ForeignKey("documents.id"), nullable=False, index=True
     )
- 
-    # 🔒 SESSION IS MANDATORY & UNIQUE
+
     session_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
     )
- 
+
     filename = Column(String(512), nullable=False)
     file_type = Column(String(128))
     file_size_mb = Column(Numeric)
- 
+
     created_at = Column(DateTime, server_default=func.now())
- 
+
     document = relationship("Document", back_populates="ai_document")
     chunks = relationship(
         "DocumentChunk",
         back_populates="ai_document",
         cascade="all, delete-orphan",
     )
- 
+
     summary = relationship(
         "DocumentSummary",
         back_populates="ai_document",
@@ -251,9 +243,6 @@ class AIDocument(Base):
         cascade="all, delete-orphan",
     )
 
-# =====================================================
-# DOCUMENT CHUNKS (STRICTLY DOCUMENT + SESSION SCOPED)
-# =====================================================
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
@@ -289,9 +278,6 @@ class DocumentChunk(Base):
         ),
     )
 
-# =====================================================
-# DOCUMENT SUMMARY (ONE PER DOCUMENT)
-# =====================================================
 
 class DocumentSummary(Base):
     __tablename__ = "document_summaries"
@@ -311,9 +297,6 @@ class DocumentSummary(Base):
 
     ai_document = relationship("AIDocument", back_populates="summary")
 
-# =====================================================
-# SESSION CHAT MESSAGES (DOCUMENT-SCOPED)
-# =====================================================
 
 class SessionMessage(Base):
     __tablename__ = "session_messages"
@@ -337,13 +320,8 @@ class SessionMessage(Base):
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    __table_args__ = (
-        CheckConstraint("role IN ('user','assistant','system')"),
-    )
+    __table_args__ = (CheckConstraint("role IN ('user','assistant','system')"),)
 
-# =====================================================
-# SESSION MEMORY SUMMARY (ONE PER SESSION)
-# =====================================================
 
 class SessionMemorySummary(Base):
     __tablename__ = "session_memory_summaries"
@@ -356,6 +334,7 @@ class SessionMemorySummary(Base):
 
     summary = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 
 class SidebarMenu(Base):
     __tablename__ = "sidebar_menus"
@@ -429,7 +408,7 @@ class DocumentApprovalStep(Base):
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=False)
     approver_type = Column(String, nullable=False)
 
-    status = Column(String, default="PENDING")  
+    status = Column(String, default="PENDING")
 
     remarks = Column(String)
     action_at = Column(DateTime)

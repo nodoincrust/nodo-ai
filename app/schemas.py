@@ -154,7 +154,7 @@ class CreateEmployeeSchema(BaseModel):
     department_id: Optional[int] = None
     designation: str = Field(..., max_length=255)
     reports_to: Optional[int] = None
-    is_active:bool
+    is_active: bool
 
 
 class UpdateEmployeeSchema(BaseModel):
@@ -163,22 +163,18 @@ class UpdateEmployeeSchema(BaseModel):
     department_id: Optional[int] = None
     reports_to: Optional[int] = None
     designation: Optional[str]
-    is_active:bool
+    is_active: bool
 
 
 class UpdateEmployeeStatusSchema(BaseModel):
     is_active: bool
 
 
-# ------------------------ AI schemas ------------------------
-# DOCUMENT UPLOAD RESPONSE
-
 class UploadAIResponse(BaseModel):
     document_id: int
     chunks: int
     message: str
 
-# CHAT (DOCUMENT-CENTRIC)
 
 class ChatRequest(BaseModel):
     document_id: int = Field(..., gt=0)
@@ -191,6 +187,7 @@ class ChatResponse(BaseModel):
     answer: str
     citations: List[dict]
 
+
 class SummaryResponse(BaseModel):
     document_id: int
     summary: str
@@ -199,9 +196,11 @@ class SummaryResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class DocumentSaveSchema(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
+
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1)
@@ -211,7 +210,8 @@ class AskTextPayload(BaseModel):
     text: str = Field(..., min_length=1)
     question: str = Field(..., min_length=1)
     mode: str = Field(default="documents")
-   
+
+
 class GetCompaniesRequest(BaseModel):
 
     page: int = 1
@@ -224,10 +224,12 @@ class getDepartments(BaseModel):
     page: int = 1
     pagelimit: int = 10
     search: Optional[str] = None
-    status: Optional[str] = None 
+    status: Optional[str] = None
+
 
 class getDepartmentList(BaseModel):
-    search:Optional[str]=None
+    search: Optional[str] = None
+
 
 class DocumentAssignSchema(BaseModel):
     assignee_ids: list[int]
@@ -237,7 +239,8 @@ class GetEmployee(BaseModel):
     page: int = 1
     pagelimit: int = 10
     search: Optional[str] = None
-    status:Optional[str]=None
+    status: Optional[str] = None
+
 
 class GetEmployeeList(BaseModel):
-    search:Optional[str]=None
+    search: Optional[str] = None

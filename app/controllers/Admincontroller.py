@@ -7,7 +7,6 @@ from app.services.Adminservice import (
     updateStatusCompany,
     delete_company_service,
     update_company_details,
-    search_companies,
 )
 from app.db import SessionLocal
 from app.schemas import (
@@ -16,7 +15,6 @@ from app.schemas import (
     UpdateCompanyStatusSchema,
     UpdateCompanySchema,
     GetCompaniesRequest,
-    getDepartments,
 )
 from sqlalchemy.orm import Session
 from app.helpers import get_current_user
@@ -76,7 +74,7 @@ def companiesList(
         page=payload.page,
         size=payload.pagelimit,
         search=payload.search,
-        status=payload.status
+        status=payload.status,
     )
 
 
@@ -121,15 +119,3 @@ def update_company(
         companyId=companyId, payload=payload, db=db, user=user
     )
 
-
-@router.get("/search")
-def search(
-    query: str | None = Query(default=None, min_length=1),
-    page: int = 1,
-    size: int = 10,
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    if user["role"] != UserRole.SYSTEM_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Unauthorized access")
-    return search_companies(query=query, page=page, size=size, db=db, user=user)

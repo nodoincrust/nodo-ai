@@ -20,7 +20,7 @@ from app.services.chat_service import chatWithDocument
 from app.services.ai_DBservice import getOrCreateSessionForDocument
 from jobs_store import jobs
 
-ASYNC_THRESHOLD_MB = 2.0                                  # File size threshold for async processing
+ASYNC_THRESHOLD_MB = 5.0
 
 router = APIRouter(prefix="/nodo/ai")
 
@@ -32,17 +32,20 @@ async def uploadDocument(
     current_user=Depends(get_current_user),
 ):
     if not file.filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")  # Validates filename
+        raise HTTPException(status_code=400, detail="Invalid filename")
 
-    tempPath = None
     db = SessionLocal()
+    tempPath = None
 
     try:
         _, extension = os.path.splitext(file.filename)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
             shutil.copyfileobj(file.file, tmp)
-            tempPath = tmp.name                                           # Stores uploaded file temporarily
+            tempPath = tmp.name
+
+        if not os.path.exists(tempPath) or os.path.getsize(tempPath) == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
         fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
 
@@ -52,30 +55,31 @@ async def uploadDocument(
             originalFilename=file.filename,
             departmentId=current_user["department_id"],
             currentUser=current_user,
-        )                                                                 # Creates draft document
+        )
+
+        tempPath = None
 
         if fileSizeMb >= ASYNC_THRESHOLD_MB:
             backgroundTasks.add_task(
                 processDocument,
-                filePath=tempPath,
                 document_id=documentId,
                 filename=file.filename,
                 fileType=file.content_type,
                 fileSizeMb=fileSizeMb,
             )
+
             return {
                 "status": "processing",
                 "documentId": documentId,
                 "fileSizeMb": round(fileSizeMb, 2),
-            }                                                             # Triggers async ingestion
+            }
 
         result = processDocument(
-            filePath=tempPath,
             document_id=documentId,
             filename=file.filename,
             fileType=file.content_type,
             fileSizeMb=fileSizeMb,
-        )                                                                 # Processes small files synchronously
+        )
 
         sessionId = getOrCreateSessionForDocument(documentId)
 
@@ -90,47 +94,46 @@ async def uploadDocument(
 
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(exc))             # Handles upload failure
+        raise HTTPException(status_code=500, detail=str(exc))
 
     finally:
         db.close()
         if tempPath and os.path.exists(tempPath):
-            os.remove(tempPath)                                           # Cleans up temporary file
+            os.remove(tempPath)
 
 
 @router.get("/chat")
 def chatApi(*, document_id: int, query: str):
     if not document_id:
-        raise HTTPException(status_code=400, detail="document_id is required")  # Validates input
+        raise HTTPException(status_code=400, detail="document_id is required")
 
-    session_id = getOrCreateSessionForDocument(document_id)
+    sessionId = getOrCreateSessionForDocument(document_id)
 
     result = chatWithDocument(
-        document_id=document_id,
-        session_id=session_id,
+        document_id=document_id,   
+        session_id=sessionId,      
         query=query,
-    )                                                                     # Executes chat pipeline
+    )
 
     return {
         "document_id": document_id,
-        "session_id": session_id,
+        "session_id": sessionId,
         "answer": result["answer"],
         "citations": result.get("citations", []),
     }
 
-
-@router.post("/summary/start/{documentId}")
-def start_summary(documentId: int):
+@router.post("/summary/start/{document_id}")
+def start_summary(document_id: int):
     job_id = uuid4().hex
-    jobs[job_id] = {"status": "running", "result": None}                  # Registers summary job
+    jobs[job_id] = {"status": "running", "result": None}
 
-    getOrCreateSessionForDocument(documentId)
+    getOrCreateSessionForDocument(document_id)
 
     Thread(
         target=run_summary_job,
-        args=(job_id, documentId),
+        args=(job_id, document_id),
         daemon=True,
-    ).start()                                                              # Runs summary generation in background
+    ).start()
 
     return {"job_id": job_id}
 
@@ -139,5 +142,5 @@ def start_summary(documentId: int):
 def get_summary_status(job_id: str):
     job = jobs.get(job_id)
     if not job:
-        return {"status": "not_found"}                                    # Handles invalid job lookup
+        return {"status": "not_found"}
     return {"job_id": job_id, **job}

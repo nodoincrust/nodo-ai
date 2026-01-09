@@ -20,7 +20,7 @@ def load_recent_chat_history(
         .order_by(SessionMessage.created_at.desc())
         .limit(limit)
         .all()
-    )  
+    )
 
     messages.reverse()
 
@@ -37,13 +37,33 @@ def chatWithDocument(
     query: str,
 ) -> dict:
 
-    with SessionLocal() as db:  # Opens DB session
+    with SessionLocal() as db:
 
-        # Handle chat-history recall deterministically
-        if "last chat" in query.lower() or "previous chat" in query.lower() or "what we talk" in query.lower():
+        # --------------------------------------------------
+        # 1️⃣ Resolve AI document for this document
+        # --------------------------------------------------
+        ai_doc = (
+            db.query(AIDocument)
+            .filter(AIDocument.document_id == document_id)
+            .first()
+        )
+
+        if not ai_doc:
+            return {
+                "status": "processing",
+                "message": "Document ingestion not completed yet",
+            }
+
+        # --------------------------------------------------
+        # 2️⃣ Handle recall queries (chat history only)
+        # --------------------------------------------------
+        if any(x in query.lower() for x in ["last chat", "previous chat", "what we talk"]):
             messages = (
                 db.query(SessionMessage)
-                .filter(SessionMessage.session_id == session_id)
+                .filter(
+                    SessionMessage.session_id == session_id,
+                    SessionMessage.document_id == document_id,
+                )
                 .order_by(SessionMessage.created_at.asc())
                 .all()
             )
@@ -51,41 +71,48 @@ def chatWithDocument(
             if not messages:
                 answer = "This is the beginning of our conversation."
             else:
-                lines = []
-                for m in messages:
-                    who = "You asked" if m.role == "user" else "I answered"
-                    lines.append(f"{who}: {m.content}")
-                answer = "In our previous chat:\n" + "\n".join(lines)
+                answer = "In our previous chat:\n" + "\n".join(
+                    f"{'You asked' if m.role == 'user' else 'I answered'}: {m.content}"
+                    for m in messages
+                )
 
             db.add_all([
-                SessionMessage(session_id=session_id, role="user", content=query),
-                SessionMessage(session_id=session_id, role="assistant", content=answer),
-            ])  # Stores recall interaction
+                SessionMessage(
+                    session_id=session_id,
+                    document_id=document_id,
+                    role="user",
+                    content=query,
+                ),
+                SessionMessage(
+                    session_id=session_id,
+                    document_id=document_id,
+                    role="assistant",
+                    content=answer,
+                ),
+            ])
             db.commit()
 
-            return {"status": "success", "answer": answer, "citations": []}
-
-        ai_doc = (
-            db.query(AIDocument)
-            .filter(AIDocument.document_id == document_id)
-            .first()
-        )  # Resolves AI document
-
-        if not ai_doc:
             return {
-                "status": "processing",
-                "message": "Document ingestion not completed yet",
-            }  # Guards early chat calls
+                "status": "success",
+                "answer": answer,
+                "citations": [],
+            }
 
-        chat_history = load_recent_chat_history(db, session_id)  # Loads recent context
+        # --------------------------------------------------
+        # 3️⃣ Load recent chat history
+        # --------------------------------------------------
+        chat_history = load_recent_chat_history(db, session_id)
 
+        # --------------------------------------------------
+        # 4️⃣ Fetch document chunks (AI-owned data)
+        # --------------------------------------------------
         chunks = (
             db.query(DocumentChunk)
             .filter(DocumentChunk.ai_document_id == ai_doc.id)
             .order_by(DocumentChunk.chunk_index)
             .limit(8)
             .all()
-        )  # Retrieves top chunks for context
+        )
 
         context_parts = []
         citations = []
@@ -104,16 +131,16 @@ def chatWithDocument(
                 context_parts.append(summary.summary_text)
                 citations = summary.citations or []
             else:
-                context_parts.append("No document context available.")  # Handles general questions
+                context_parts.append("No document context available.")
 
-        full_context_parts = []
-
+        # --------------------------------------------------
+        # 5️⃣ Build final LLM context
+        # --------------------------------------------------
+        full_context = ""
         if chat_history:
-            full_context_parts.append(f"CHAT HISTORY:\n{chat_history}")
+            full_context += f"CHAT HISTORY:\n{chat_history}\n\n"
 
-        full_context_parts.append("DOCUMENT:\n" + "\n\n".join(context_parts))
-
-        full_context = "\n\n".join(full_context_parts)  # Builds final LLM context
+        full_context += "DOCUMENT:\n" + "\n\n".join(context_parts)
 
         llm_result = askLlm(
             context=full_context,
@@ -125,17 +152,17 @@ def chatWithDocument(
         db.add_all([
             SessionMessage(
                 session_id=session_id,
-                ai_document_id=ai_doc.id,
+                document_id=document_id,
                 role="user",
                 content=query,
             ),
             SessionMessage(
                 session_id=session_id,
-                ai_document_id=ai_doc.id,
+                document_id=document_id,
                 role="assistant",
                 content=answer,
             ),
-        ])  # Persists conversation
+        ])
         db.commit()
 
         return {

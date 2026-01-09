@@ -1,8 +1,8 @@
 from typing import List, Iterable, Dict, Any
 from sqlalchemy.orm import Session
-
+import uuid
 from app.models import DocumentChunk
-from app.AIhelpers.embedding_helper import createEmbedding
+from app.AIhelpers.embedding_helper import createEmbeddings
 
 
 def chunkText(
@@ -67,11 +67,13 @@ def createDocumentChunks(
     ai_document_id: int,
     session_id: str,
     pages: Iterable[Any],
+    start_index: int = 0,
     chunkSize: int = 512,
     overlap: int = 60,
 ) -> int:
 
-    chunk_index = 0
+    chunksCreated = 0
+    chunk_index = start_index
 
     for chunk in chunkTextFromPages(
         pages,
@@ -83,12 +85,13 @@ def createDocumentChunks(
         page_number = chunk["page"]
 
         if not text:
-            continue                               # Skips empty chunks
+            continue  # Skip empty chunks
 
-        embedding = _flat(createEmbedding(text))   # Generates vector embedding
+        embedding = _flat(createEmbeddings([text])[0])
 
         db.add(
             DocumentChunk(
+                id=uuid.uuid4(),
                 ai_document_id=ai_document_id,
                 session_id=session_id,
                 chunk_index=chunk_index,
@@ -99,6 +102,6 @@ def createDocumentChunks(
         )
 
         chunk_index += 1
+        chunksCreated += 1
 
-    db.commit()                                    # Persists all chunks atomically
-    return chunk_index
+    return chunksCreated

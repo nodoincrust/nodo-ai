@@ -96,7 +96,7 @@ def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
         response = requests.post(
             OLLAMA_URL,
             json=payload,
-            timeout=45,                                    # Prevents blocking
+            # timeout=45,                                    # Prevents blocking
         )
         response.raise_for_status()
 

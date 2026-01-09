@@ -24,8 +24,7 @@ def getOrCreateSessionForDocument(document_id: int) -> str:
             .filter(AIDocument.document_id == document_id)
             .first()
         )
-
-        # shows Document ingestion or session creation is incomplete
+        
         if not ai_doc or not ai_doc.session_id:
             raise RuntimeError("AI session not initialized for document")    
 

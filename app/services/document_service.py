@@ -1,7 +1,7 @@
 import logging
 import shutil
 import os
-import uuid
+# import uuid
 from typing import Dict
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
@@ -30,7 +30,6 @@ CHUNK_BATCH_SIZE = 32
 
 def processDocument(
     *,
-    filePath: str,
     document_id: int,
     filename: str,
     fileType: str,
@@ -39,11 +38,27 @@ def processDocument(
 
     db: Session = SessionLocal()
     ocrUsed = False
+    chunksCreated = 0
 
     try:
-        session = ChatSession()                          # Creates a new chat session
-        db.add(session)
-        db.flush()
+        version = (
+            db.query(DocumentVersion)
+            .filter(DocumentVersion.document_id == document_id)
+            .order_by(DocumentVersion.version_number.desc())
+            .first()
+        )
+
+        if not version or not version.file_path:
+            raise FileNotFoundError(
+                f"No stored file found for document_id={document_id}"
+            )
+
+        storedFilePath = version.file_path
+
+        if not os.path.exists(storedFilePath):
+            raise FileNotFoundError(
+                f"Stored document file missing: {storedFilePath}"
+            )
 
         aiDocument = (
             db.query(AIDocument)
@@ -52,6 +67,10 @@ def processDocument(
         )
 
         if not aiDocument:
+            session = ChatSession()
+            db.add(session)
+            db.flush()
+
             aiDocument = AIDocument(
                 document_id=document_id,
                 session_id=session.session_id,
@@ -61,23 +80,33 @@ def processDocument(
             )
             db.add(aiDocument)
             db.commit()
-        else:
-            session.session_id = aiDocument.session_id    # Reuses existing session
 
-        chunksCreated = 0                                 # Initializes chunk counter
+        lastChunkIndex = (
+            db.query(DocumentChunk.chunk_index)
+            .filter(DocumentChunk.ai_document_id == aiDocument.id)
+            .order_by(DocumentChunk.chunk_index.desc())
+            .limit(1)
+            .scalar()
+        )
 
-        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
+        chunkIndex = (lastChunkIndex + 1) if lastChunkIndex is not None else 0
+
+        for pageNumber, rawText, usedOcr in iterateFilePages(storedFilePath):
             if not rawText or not rawText.strip():
                 continue
 
             ocrUsed |= usedOcr
 
-            chunksCreated += createDocumentChunks(
+            created = createDocumentChunks(
                 db=db,
                 ai_document_id=aiDocument.id,
                 session_id=aiDocument.session_id,
                 pages=[(pageNumber, rawText)],
-            )                                             # Creates vector chunks
+                start_index=chunkIndex,   
+            )
+
+            chunkIndex += created
+            chunksCreated += created
 
         db.commit()
 
@@ -90,10 +119,10 @@ def processDocument(
             "file_size_mb": round(fileSizeMb, 2),
         }
 
-    except Exception as exc:
+    except Exception:
         db.rollback()
         logger.exception("Document ingestion failed")
-        raise exc
+        raise
 
     finally:
         db.close()

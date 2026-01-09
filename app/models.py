@@ -180,7 +180,6 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
-
 class AIDocument(Base):
     __tablename__ = "ai_documents"
 
@@ -208,12 +207,16 @@ class AIDocument(Base):
 
     created_at = Column(DateTime, server_default=func.now())
 
-    document = relationship("Document", back_populates="ai_document")
+    document = relationship(
+        "Document",
+        back_populates="ai_document",
+    )
 
     chunks = relationship(
         "DocumentChunk",
         back_populates="ai_document",
         cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     summary = relationship(
@@ -221,12 +224,17 @@ class AIDocument(Base):
         back_populates="ai_document",
         uselist=False,
         cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
 
     ai_document_id = Column(
         BigInteger,
@@ -247,9 +255,16 @@ class DocumentChunk(Base):
     embedding = Column(Vector(768))
     page_number = Column(Integer)
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+    )
 
-    ai_document = relationship("AIDocument", back_populates="chunks")
+    # 🔑 REQUIRED
+    ai_document = relationship(
+        "AIDocument",
+        back_populates="chunks",
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -275,13 +290,21 @@ class DocumentSummary(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
-    ai_document = relationship("AIDocument", back_populates="summary")
+    # 🔑 THIS FIXES THE ERROR
+    ai_document = relationship(
+        "AIDocument",
+        back_populates="summary",
+    )
 
 
 class SessionMessage(Base):
     __tablename__ = "session_messages"
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
 
     session_id = Column(
         PG_UUID(as_uuid=True),
@@ -290,22 +313,32 @@ class SessionMessage(Base):
         index=True,
     )
 
-    ai_document_id = Column(
+    # ✅ ALIGNED: references documents.id
+    document_id = Column(
         BigInteger,
-        ForeignKey("ai_documents.id", ondelete="CASCADE"),
+        ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    role = Column(String, nullable=False)
-    content = Column(Text, nullable=False)
-
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    __table_args__ = (
-        CheckConstraint("role IN ('user','assistant','system')"),
+    role = Column(
+        String,
+        nullable=False,
     )
 
+    content = Column(
+        Text,
+        nullable=False,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant', 'system')"),
+    )
 
 # =====================================================
 # SESSION MEMORY SUMMARY (LONG-TERM MEMORY)

@@ -107,26 +107,19 @@ async def uploadDocument(
         except Exception:
             pass
 
-# chat api endpoint
 @router.get("/chat")
-async def chatApi(
-    *,
-    document_id: int,
-    query: str,
-):
+def chatApi(*, document_id: int, query: str):
     if not document_id:
-        raise HTTPException(status_code=400, detail="document_id is required")
-   
-    # ensure session exists for document
+        raise HTTPException(status_code=400, detail="document_id is required")  # Validates input
+
     session_id = getOrCreateSessionForDocument(document_id)
- 
-    #Calls chat pipeline that retrieves context, calls the LLM and returns the answer
+
     result = chatWithDocument(
         document_id=document_id,
         session_id=session_id,
         query=query,
-    )
- 
+    )                                                                     # Executes chat pipeline
+
     return {
         "document_id": document_id,
         "session_id": session_id,

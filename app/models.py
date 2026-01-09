@@ -141,16 +141,12 @@ class Department(Base):
 
     head = relationship("User", foreign_keys=[head_user_id])
 
-    # ------------------------AI MODELS-----------------------------
-
+# ------------------------AI MODELS-----------------------------
 
 # from db import Base
 EMBEDDING_DIMENSION = 768
 
-# =====================================================
-# DOCUMENT ROOT (SINGLE SOURCE OF TRUTH)
-# =====================================================
-
+# Document Model
 class Document(Base):
     __tablename__ = "documents"
 
@@ -179,7 +175,7 @@ class Document(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # 🔑 EXACTLY ONE AI DOCUMENT PER DOCUMENT
+    # One to One relationship with AIDocument
     ai_document = relationship(
         "AIDocument",
         back_populates="document",
@@ -187,31 +183,13 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
-# =====================================================
-# AI SESSION (CREATED ONLY VIA AIDocument)
-# =====================================================
-
-class ChatSession(Base):
-    __tablename__ = "sessions"
-
-    session_id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-# =====================================================
-# AI DOCUMENT (ENFORCES ONE DOCUMENT → ONE SESSION)
-# =====================================================
-
+#AI Document Model
 class AIDocument(Base):
     __tablename__ = "ai_documents"
 
     id=Column(BigInteger, primary_key=True)
 
+    # Foreign key to docuements.id
     document_id = Column(
         BigInteger, ForeignKey("documents.id"), nullable=False, index=True
     )
@@ -229,14 +207,17 @@ class AIDocument(Base):
 
     created_at = Column(DateTime, server_default=func.now())
 
+    #relationship back to Document
     document = relationship("Document", back_populates="ai_document")
 
+    #relationship to DocumentChunk
     chunks = relationship(
         "DocumentChunk",
         back_populates="ai_document",
         cascade="all, delete-orphan",
     )
 
+    #relationship to DocumentSummary
     summary = relationship(
         "DocumentSummary",
         back_populates="ai_document",
@@ -244,10 +225,20 @@ class AIDocument(Base):
         cascade="all, delete-orphan",
     )
 
-# =====================================================
-# DOCUMENT CHUNKS (STRICTLY DOCUMENT + SESSION SCOPED)
-# =====================================================
+#chat session model : defines one chat session per document
+class ChatSession(Base):
+    __tablename__ = "sessions"
 
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+# Document Chunk Model
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
@@ -282,10 +273,7 @@ class DocumentChunk(Base):
         ),
     )
 
-# =====================================================
-# DOCUMENT SUMMARY (ONE PER DOCUMENT)
-# =====================================================
-
+# Document Summary Model
 class DocumentSummary(Base):
     __tablename__ = "document_summaries"
 
@@ -302,13 +290,12 @@ class DocumentSummary(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
+    # relationship back to AIDocument
     ai_document = relationship("AIDocument", back_populates="summary") 
 
-# =====================================================
-# SESSION CHAT MESSAGES (DOCUMENT-SCOPED)
-# =====================================================
 
-class SessionMessage(Base):
+# session messages (chat history)
+class   SessionMessage(Base):
     __tablename__ = "session_messages"
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -334,10 +321,8 @@ class SessionMessage(Base):
         CheckConstraint("role IN ('user','assistant','system')"),
     )
 
-# =====================================================
-# SESSION MEMORY SUMMARY (ONE PER SESSION)
-# =====================================================
 
+# Session Memory Summary Model
 class SessionMemorySummary(Base):
     __tablename__ = "session_memory_summaries"
 

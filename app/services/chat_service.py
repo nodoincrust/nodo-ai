@@ -15,9 +15,6 @@ from app.AIhelpers.embedding_helper import createEmbedding
 from app.AIhelpers.llm_helper import askLlm
 logger = logging.getLogger("ai.chatService")
 
-# =====================================================
-# SYSTEM PROMPTS
-# =====================================================
 
 DOCUMENT_SYSTEM_PROMPT = """
 You are an AI assistant answering questions using the PROVIDED DOCUMENT CONTENT BELOW.
@@ -42,10 +39,7 @@ Rules:
 - Do NOT hallucinate
 """
 
-# =====================================================
-# INTENT DETECTION (FAST, NO LLM)
-# =====================================================
-
+# INTENT DETECTION
 DOCUMENT_HINTS = (
     "this document","in this document","according to","mentioned","described","page","section","key issue",)
 
@@ -54,7 +48,7 @@ GENERAL_qPATTERN = (
 
 
 def is_general_question(query: str) -> bool:
-    q = query.lower().strip()
+    q = query.lower().strip()       #Normalizes input for reliable keyword matching
 
     if any(k in q for k in DOCUMENT_HINTS):
         return False
@@ -64,19 +58,15 @@ def is_general_question(query: str) -> bool:
 
     return len(q.split()) <= 4
 
-# VECTORS
-
+# VECTORSPACE SIMILARITY
 def cosine_similarity(a: List[float], b: List[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    mag_a = sqrt(sum(x * x for x in a))
+    dot = sum(x * y for x, y in zip(a, b))              #Measures directional similarity in vectors
+    mag_a = sqrt(sum(x * x for x in a))         #vector magnitudes for normalization
     mag_b = sqrt(sum(y * y for y in b))
     return dot / (mag_a * mag_b) if mag_a and mag_b else 0.0
 
 
-# =====================================================
-# DOCUMENT CONTEXT RETRIEVAL
-# =====================================================
-
+# Docuemnt context retrieval
 def retrieve_document_context(
     db: Session,
     ai_document_id: int,
@@ -84,14 +74,16 @@ def retrieve_document_context(
     top_k: int = 4,
 ) -> Tuple[str, list]:
 
-    query_embedding = createEmbedding(query)
+    query_embedding = createEmbedding(query)     #user query into a vector
 
+    # Loads all stored chunks
     chunks = (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == ai_document_id)
         .all()
     )
 
+    #semantic similarity to the query
     scored = [
         (cosine_similarity(query_embedding, c.embedding), c)
         for c in chunks
@@ -101,7 +93,7 @@ def retrieve_document_context(
     if not scored:
         return "", []
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    scored.sort(key=lambda x: x[0], reverse=True)       #Ranks chunks by similarity with query 
     top_chunks = scored[:top_k]
 
     context = "\n\n".join(
@@ -113,11 +105,28 @@ def retrieve_document_context(
 
     return context, citations
 
+#loding the previous chat history
+def load_recent_chat_history(
+    db: Session,
+    session_id: str,
+    limit: int = 6,
+) -> str:
+    messages = (
+        db.query(SessionMessage)
+        .filter(SessionMessage.session_id == session_id)
+        .order_by(SessionMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
-# =====================================================
-# MAIN CHAT FUNCTION
-# =====================================================
+    messages.reverse()
 
+    return "\n".join(
+        f"{m.role.upper()}: {m.content}"
+        for m in messages
+    )
+
+#chat with document function
 def chatWithDocument(
     *,
     document_id: int,
@@ -127,7 +136,6 @@ def chatWithDocument(
 
     with SessionLocal() as db:
 
-        # 1️⃣ Resolve AI document (single query)
         ai_doc = (
             db.query(AIDocument.id)
             .filter(AIDocument.document_id == document_id)
@@ -139,44 +147,55 @@ def chatWithDocument(
                 "status": "processing",
                 "message": "Document ingestion not completed yet",
             }
-
+        
+        # Extracts internal AI document ID
         ai_document_id = ai_doc.id
 
-        # 2️⃣ Intent detection
-        general_question = is_general_question(query)
+        chat_history = load_recent_chat_history(db, session_id)  # Loads recent chat messages for continuity
 
         context = ""
         citations = []
+        general_question = False
 
-        # 3️⃣ Retrieve document context only if needed
-        if not general_question:
-            context, citations = retrieve_document_context(
-                db, ai_document_id, query
-            )
+        context, citations = retrieve_document_context(
+            db, ai_document_id, query
+        )
 
-            if not context:
-                summary = (
-                    db.query(DocumentSummary)
-                    .filter(DocumentSummary.document_id == ai_document_id)
-                    .first()
-                )
-                if summary:
-                    context = summary.summary_text or ""
-                    citations = summary.citations or []
+        if not context:
+            summary = (
+                db.query(DocumentSummary)
+                .filter(DocumentSummary.document_id == ai_document_id)
+                .first()
+            ) 
+        # Falls back to document summary if chunks are missing
+            if summary and summary.summary_text:
+                context = summary.summary_text
+                citations = summary.citations or []
+            else:
+                general_question = True 
 
-        # 4️⃣ Prompt assembly (minimal tokens)
         system_prompt = (
             GENERAL_SYSTEM_PROMPT if general_question
             else DOCUMENT_SYSTEM_PROMPT
         )
 
-        llm_prompt = f"{system_prompt}\n\n{context}\n\nQuestion:\n{query}"
+        full_context_parts = [system_prompt]
 
-        # 5️⃣ LLM call (single call)
-        llm_result = askLlm(context=llm_prompt, question=query)
+        if chat_history:
+            full_context_parts.append(f"CHAT HISTORY:\n{chat_history}")  # Injects previous conversation
+
+        if context:
+            full_context_parts.append(f"DOCUMENT:\n{context}")
+
+        full_context = "\n\n".join(full_context_parts) 
+
+        llm_result = askLlm(
+            context=full_context,
+            question=query,
+        )
+
         answer = llm_result["data"]["answer"]
 
-        # 6️⃣ Persist chat
         db.add_all([
             SessionMessage(
                 session_id=session_id,
@@ -195,8 +214,15 @@ def chatWithDocument(
 
         return {
             "status": "success",
-            # "document_id": document_id,
-            # "session_id": session_id,
             "answer": answer,
             "citations": [] if general_question else citations,
         }
+
+# Previous Chat Display
+def fetchAllMessages(db: Session, *, sessionId: str) -> list:
+    return (
+        db.query(SessionMessage)
+        .filter(SessionMessage.session_id == sessionId)
+        .order_by(SessionMessage.created_at.asc())
+        .all()
+    )

@@ -12,10 +12,7 @@ def getDocumentTags(
     *,
     document_id: int,
 ) -> List[str]:
-    """
-    Fetch stored tags for a document.
-    READ-ONLY service.
-    """
+    # Fetch stored tags for a document.
     record = (
         db.query(DocumentSummary)
         .filter_by(document_id=document_id)

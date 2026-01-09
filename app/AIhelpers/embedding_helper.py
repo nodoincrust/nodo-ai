@@ -15,27 +15,16 @@ EMBED_DIM = 768
 CACHE_TTL = 86400
 TIMEOUT = 60
 
-
-# --------------------------------------------------
-# Helpers
-# --------------------------------------------------
-
+# Generate stable hash for a text string
 def hashText(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-
+#Redis keys for namespace embeddings cache
 def getCacheKey(text: str) -> str:
     return f"emb:{hashText(text)}"
 
-
-# --------------------------------------------------
-# SINGLE TEXT EMBEDDING (CORE, OLLAMA SAFE)
-# --------------------------------------------------
-
+#Embedding vector generation (text only) 
 def createEmbedding(text: str) -> List[float]:
-    """
-    Generate embedding for a SINGLE text (Ollama compatible).
-    """
 
     if not isinstance(text, str):
         raise TypeError(f"Expected str, got {type(text)}")
@@ -44,9 +33,8 @@ def createEmbedding(text: str) -> List[float]:
     if not text:
         raise ValueError("Empty text passed for embedding")
 
-    cache_key = getCacheKey(text)
-
-    # 1️⃣ Redis cache
+    cache_key = getCacheKey(text)       #Generates a deterministic Redis key
+    #cache fetch embedding
     cached = REDIS.get(cache_key)
     if cached:
         vec = json.loads(cached)
@@ -54,7 +42,6 @@ def createEmbedding(text: str) -> List[float]:
             return vec
         REDIS.delete(cache_key)
 
-    # 2️⃣ Ollama call (ONE TEXT ONLY)
     payload = {
         "model": EMBED_MODEL,
         "prompt": text,
@@ -73,7 +60,6 @@ def createEmbedding(text: str) -> List[float]:
     data = response.json()
     embedding = data.get("embedding")
 
-    # 3️⃣ Validate
     if not isinstance(embedding, list):
         raise RuntimeError("Invalid embedding format from Ollama")
 
@@ -81,28 +67,18 @@ def createEmbedding(text: str) -> List[float]:
         raise RuntimeError(
             f"Invalid embedding dimension {len(embedding)}"
         )
-
-    # 4️⃣ Cache + return
+    #cache store embeddings
     REDIS.setex(cache_key, CACHE_TTL, json.dumps(embedding))
     return embedding
 
-
-# --------------------------------------------------
-# LIST / BATCH API (SAFE WRAPPER)
-# --------------------------------------------------
-
 def createEmbeddings(texts: List[str]) -> List[List[float]]:
-    """
-    Batch-friendly API.
-    Internally calls Ollama ONE TEXT AT A TIME.
-    """
-
+    #Batch embedding generation
     if not isinstance(texts, list):
         raise TypeError("createEmbeddings expects a list of strings")
 
     embeddings: List[List[float]] = []
 
     for text in texts:
-        embeddings.append(createEmbedding(text))
+        embeddings.append(createEmbedding(text))        #Generates embeddings for each text
 
     return embeddings

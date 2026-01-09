@@ -24,9 +24,7 @@ def getExecutor() -> ThreadPoolExecutor:
 
 
 def submitMemoryUpdate(sessionId: str) -> None:
-    """
-    Schedule memory summarization safely.
-    """
+    # Schedule memory summarization safely.
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

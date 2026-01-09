@@ -1,4 +1,3 @@
-import uuid
 import logging
 import shutil
 import os
@@ -11,7 +10,6 @@ from app.models import (
     Document,
     AIDocument,
     ChatSession,
-    DocumentChunk,
     DocumentVersion,
     DocumentReview,
     Company,
@@ -26,11 +24,7 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_MB = 50
 CHUNK_BATCH_SIZE = 32
 
-
-# ======================================================
-# MAIN AI INGESTION PIPELINE
-# ======================================================
-
+#Core document processing function
 def processDocument(
     *,
     filePath: str,
@@ -44,6 +38,7 @@ def processDocument(
     ocrUsed = False
 
     try:
+        #Checks if AI metadata already exists
         ai_doc = (
             db.query(AIDocument)
             .filter(AIDocument.document_id == document_id)
@@ -51,10 +46,11 @@ def processDocument(
         )
 
         if not ai_doc:
-            session = ChatSession()
+            session = ChatSession() #creates new chat session for document
             db.add(session)
             db.flush()
 
+            #maping with ai_document record
             ai_doc = AIDocument(
                 document_id=document_id,
                 session_id=session.session_id,
@@ -67,11 +63,12 @@ def processDocument(
 
         pages: List[tuple] = []
 
-        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
+        #iterates through file pages to extract text (with OCR if needed)
+        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):  
             if not rawText or not rawText.strip():
                 continue
 
-            ocrUsed |= usedOcr
+            ocrUsed |= usedOcr   #flag if any page used OCR
             pages.append((pageNumber, rawText))
 
         if not pages:
@@ -79,9 +76,10 @@ def processDocument(
                 "status": "processing",
                 "message": "No readable text extracted",
             }
+        #Splits text into chunks, generates embeddings, and stores
         chunksCreated = createDocumentChunks(
             db=db,
-            ai_document_id=ai_doc.id,          # 🔑 ai_documents.id
+            ai_document_id=ai_doc.id,          
             session_id=str(ai_doc.session_id),
             pages=pages,
         )
@@ -103,9 +101,6 @@ def processDocument(
     finally:
         db.close()
 
-# ======================================================
-# DOCUMENT SAVE / SUBMIT
-# ======================================================
 
 def saveDocument(
     db: Session,
@@ -164,10 +159,6 @@ def saveDocument(
         "status": document.status,
     }
 
-
-# ======================================================
-# CREATE DOCUMENT DRAFT (BUSINESS FLOW)
-# ======================================================
 
 def createDocumentDraft(
     db: Session,

@@ -11,9 +11,7 @@ from app.ocr import safe_ocr
 
 
 def iterateFilePages(filePath: str) -> Iterator[Tuple[int, str, bool]]:
-    """
-    Yield (pageNumber, text, ocrUsed) for supported file types.
-    """
+    # determine file type and use appropriate extractor
     extension = os.path.splitext(filePath)[1].lower()
 
     if extension == ".pdf":
@@ -31,11 +29,7 @@ def iterateFilePages(filePath: str) -> Iterator[Tuple[int, str, bool]]:
     else:
         raise ValueError(f"Unsupported file type: {extension}")
 
-
-# =========================
-# EXTRACTORS
-# =========================
-
+#Text extractors
 def extractPdf(path: str):
     document = fitz.open(path)
     pageNumber = 1
@@ -43,7 +37,7 @@ def extractPdf(path: str):
     for page in document:
         text_blocks = []
 
-        # 1️⃣ Extract text blocks
+        # Extract text blocks
         blocks = page.get_text("blocks")
         for block in blocks:
             block_text = block[4].strip()
@@ -53,7 +47,7 @@ def extractPdf(path: str):
         if text_blocks:
             yield pageNumber, "\n".join(text_blocks), False
         else:
-            # 2️⃣ OCR fallback (image-heavy page)
+            #OCR fallback of images and embedded images
             pix = page.get_pixmap(dpi=200)
             image = Image.frombytes(
                 "RGB",
@@ -68,10 +62,11 @@ def extractPdf(path: str):
 
 
 def extractDocx(path: str):
-    document = docx.Document(path)
+    document = docx.Document(path) #
     buffer = []
     pageNumber = 1
 
+    #Groups paragraphs into page-sized chunks
     def flush():
         nonlocal buffer, pageNumber
         if buffer:
@@ -89,7 +84,7 @@ def extractDocx(path: str):
 
     yield from flush()
 
-    # Embedded images → OCR
+    # Embedded images fallbace to OCR
     for rel in document.part._rels.values():
         if "image" in rel.reltype:
             try:
@@ -102,7 +97,7 @@ def extractDocx(path: str):
                 continue
 
 def extractExcel(path: str):
-    sheets = pd.read_excel(path, sheet_name=None)
+    sheets = pd.read_excel(path, sheet_name=None)           #Loads all sheets into DataFrames
     pageNumber = 1
 
     for sheetName, df in sheets.items():
@@ -163,7 +158,7 @@ def extractTxt(path: str):
 
 def extractImage(path: str):
     image = Image.open(path)
-    text = safe_ocr(image)
+    text = safe_ocr(image)      #run OCR on image
 
     if text.strip():
         yield 1, text, True

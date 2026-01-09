@@ -9,11 +9,7 @@ from app.AIhelpers.llm_helper import askLlm
 
 logger = logging.getLogger("ai.summaryService")
 
-# ==============================
-# CONFIG
-# ==============================
-
-SUMMARY_TOP_K = 12
+SUMMARY_TOP_K = 6
 MAX_CONTEXT_CHARS = 4500
 
 BASE_SYSTEM_PROMPT = """
@@ -41,27 +37,15 @@ If unsure, return empty arrays — NEVER omit fields.
   "citations": [{"page_number": number}] (required, may be empty)
 }
 """
-
-REFINEMENT_PROMPT = """
-You are an expert editor. You are provided with a DOCUMENT and a PREVIOUS SUMMARY.
-TASK:
-Refine and expand the previous summary. 
-- Integrate new details found in the document context.
-- Ensure the final output is 10-15 lines long excluding the tags and citation.
-- Improve clarity and professional tone.
-- Keep the same JSON structure.
-"""
-
-# ==============================
-# SAFE JSON PARSER
-# ==============================
-
+# json fault-tolerant parser for LLM responses
 def safeJsonParse(raw: str) -> dict:
+    #handel Empty response
     if not raw:
         return {"summary": "", "tags": [], "citations": []}
 
-    cleanRaw = re.sub(r"[\x00-\x1F\x7F]", "", raw)
+    cleanRaw = re.sub(r"[\x00-\x1F\x7F]", "", raw) #remove non-printable characters
 
+    #handels JSON parsing and extraction
     try:
         data = json.loads(cleanRaw, strict=False)
     except Exception:
@@ -76,13 +60,13 @@ def safeJsonParse(raw: str) -> dict:
             return {"summary": cleanRaw, "tags": [], "citations": []}
 
     summaryText = data.get("summary", "")
-    tags = list(set(map(str, data.get("tags", []))))
+    tags = list(set(map(str, data.get("tags", []))))    #ensure unique string tags
     citations = []
 
     seenPages = set()
     for c in data.get("citations", []):
         page = c.get("page_number") if isinstance(c, dict) else c
-        if page and page not in seenPages:
+        if page and page not in seenPages: #avoid duplicate page citations
             citations.append({"page_number": page})
             seenPages.add(page)
 
@@ -92,16 +76,11 @@ def safeJsonParse(raw: str) -> dict:
         "citations": citations,
     }
 
-# ==============================
-# MAIN SUMMARY API
-# ==============================
-
+#summarize document function
 def summarizeDocument(documentId: int) -> dict:
     db: Session = SessionLocal()
     try:
-        # --------------------------------------------------
-        # 1️⃣ Resolve AI document
-        # --------------------------------------------------
+        #prevent summery before OCR and chunking is complete
         ai_doc = (
             db.query(AIDocument)
             .filter(AIDocument.document_id == documentId)
@@ -114,11 +93,9 @@ def summarizeDocument(documentId: int) -> dict:
                 "message": "Document ingestion not completed yet",
             }
 
-        ai_document_id = ai_doc.id
+        ai_document_id = ai_doc.id #map to ai_documents.id
 
-        # --------------------------------------------------
-        # 2️⃣ Fetch TOP-K chunks (CPU optimized)
-        # --------------------------------------------------
+        #Fetches only the first K chunks to limit CPU and LLM cost.
         chunks = (
             db.query(DocumentChunk)
             .filter(DocumentChunk.document_id == ai_document_id)
@@ -126,49 +103,46 @@ def summarizeDocument(documentId: int) -> dict:
             .limit(SUMMARY_TOP_K)
             .all()
         )
-
+        #Handel chunking not ready in large documents > 5 mb
         if not chunks:
             return {
                 "status": "processing",
                 "message": "Chunks not ready yet",
             }
 
-        # --------------------------------------------------
-        # 3️⃣ Build document excerpt context
-        # --------------------------------------------------
+        #Initializes LLM context and fallback citation storage
         chunk_parts = []
         default_citations = []
 
         for chunk in chunks:
             chunk_parts.append(
-                f"[PAGE {chunk.page_number}] {chunk.chunk_text}"
+                f"[PAGE {chunk.page_number}] {chunk.chunk_text}"     #page-aware text for traceable summaries
             )
             default_citations.append({"page_number": chunk.page_number})
 
-        document_context = "\n\n".join(chunk_parts)[:MAX_CONTEXT_CHARS]
+        document_context = "\n\n".join(chunk_parts)[:MAX_CONTEXT_CHARS] #avoid exceeding LLM context window
 
-        # --------------------------------------------------
-        # 4️⃣ Fetch previous summary (KEY OPTIMIZATION)
-        # --------------------------------------------------
+        #Checks if a summary already exists for refinement
         existing = (
             db.query(DocumentSummary)
             .filter(DocumentSummary.document_id == ai_document_id)
             .first()
         )
 
+        # Uses cached summary to speed up regeneration
         previous_summary = existing.summary_text if existing else ""
-        llm_context = (
+        llm_context = (                                           #LLM prompt construction
             f"{BASE_SYSTEM_PROMPT}\n\n"
             f"PREVIOUS SUMMARY:\n{previous_summary}\n\n"
             f"DOCUMENT EXCERPTS:\n{document_context}"
         )
 
-        llm_result = askLlm(
+        llm_result = askLlm(                                     #single LLM call for summary generation or refinement
             context=llm_context,
             question="Regenerate the summary using the provided content.",
         )
 
-        parsed = safeJsonParse(llm_result["data"]["answer"])
+        parsed = safeJsonParse(llm_result["data"]["answer"])  #Safely extracts JSON if LLM response is unformatted
 
         summary_text = parsed.get("summary", "").strip()
         tags = parsed.get("tags", [])
@@ -186,15 +160,14 @@ def summarizeDocument(documentId: int) -> dict:
             for t in tags
             if isinstance(t, str) and 2 <= len(t.strip()) <= 30
         ]
-        tags = list(dict.fromkeys(tags))[:6]
+        tags = list(dict.fromkeys(tags))[:6]                #unique tags, max 6
         if "tags" not in parsed or not isinstance(parsed["tags"], list):
             parsed["tags"] = []
 
         if "citations" not in parsed or not isinstance(parsed["citations"], list):
             parsed["citations"] = []
-        # --------------------------------------------------
-        # 6️⃣ UPSERT regenerated summary
-        # --------------------------------------------------
+
+        # update cached summary for refinement
         if existing:
             existing.summary_text = summary_text
             existing.tags = tags

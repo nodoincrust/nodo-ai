@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from app.models import DocumentChunk
 from app.AIhelpers.embedding_helper import createEmbedding
 
-
 def chunkText(
     text: str,
     chunkSize: int = 500,
@@ -20,7 +19,6 @@ def chunkText(
         startIndex += chunkSize - overlap
 
     return chunks
-
 
 def chunkTextFromPages(
     pages: Iterable[Any],
@@ -57,13 +55,17 @@ def chunkTextFromPages(
             "page": pageBuffer[0],
         }
 
+def _flat(vec):
+    if isinstance(vec, list) and vec and isinstance(vec[0], list):
+        return vec[0]
+    return vec
 
 def createDocumentChunks(
     *,
     db: Session,
-    ai_document_id: int,     # 🔑 ai_documents.id ONLY
+    ai_document_id: int,
     session_id: str,
-    pages: Iterable[Any],    # [(page_no, text)] or [text]
+    pages: Iterable[Any],
     chunkSize: int = 512,
     overlap: int = 60,
 ) -> int:
@@ -82,8 +84,7 @@ def createDocumentChunks(
         if not text:
             continue
 
-        # 🔥 EMBEDDING GENERATED BEFORE DB INSERT
-        embedding = createEmbedding(text)
+        embedding = _flat(createEmbedding(text))
 
         db.add(
             DocumentChunk(
@@ -91,7 +92,7 @@ def createDocumentChunks(
                 session_id=session_id,
                 chunk_index=chunk_index,
                 chunk_text=text,
-                embedding=embedding,          #STORED
+                embedding=embedding,
                 page_number=page_number,
             )
         )
@@ -99,5 +100,4 @@ def createDocumentChunks(
         chunk_index += 1
 
     db.commit()
-
     return chunk_index

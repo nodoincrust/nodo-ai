@@ -35,15 +35,16 @@ ERROR HANDLING:
 Every response must be: Grounded, Accurate, and Trustworthy.
 """
 
-
+#invalid JSON characters removal
 def cleanInputText(text: str) -> str:
 
     return re.sub(r"[\x00-\x1F\x7F]", " ", text)
 
-
+# LLM request function that returns a full answer
 def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
     cleanedContext = cleanInputText(context)
 
+    # Builds the payload body
     payload = {
         "model": MODEL,
         "messages": [
@@ -52,14 +53,14 @@ def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.8,
-            "num_predict": 400,
+            "temperature": 0.8,    # moderate creativity
+            "num_predict": 400,    # max tokens in response to control latency
         },
         "stream": False,
     }
 
     try:
-        response = requests.post(OLLAMA_URL, json=payload)
+        response = requests.post(OLLAMA_URL, json=payload)      #send request to OLLAMA LLM server
         response.raise_for_status()
 
         return {
@@ -78,31 +79,30 @@ def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
         }
 
 
-def askLlmStream(*, context: str, question: str) -> Iterable[str]:
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": f"Context:\n{context}"},
-            {"role": "user", "content": question},
-        ],
-        "stream": True,
-    }
+# def askLlmStream(*, context: str, question: str) -> Iterable[str]:
+#     payload = {
+#         "model": MODEL,
+#         "messages": [
+#             {"role": "system", "content": SYSTEM_PROMPT},
+#             {"role": "system", "content": f"Context:\n{context}"},
+#             {"role": "user", "content": question},
+#         ],
+#         "stream": True,
+#     }
 
-    with requests.post(OLLAMA_URL, json=payload, stream=True) as response:
-        for line in response.iter_lines():
-            if not line:
-                continue
+#     with requests.post(OLLAMA_URL, json=payload, stream=True) as response:
+#         for line in response.iter_lines():
+#             if not line:
+#                 continue
 
-            decoded = line.decode("utf-8")
-            if '"content":"' in decoded:
-                yield decoded.split('"content":"')[1].split('"')[0]
+#             decoded = line.decode("utf-8")
+#             if '"content":"' in decoded:
+#                 yield decoded.split('"content":"')[1].split('"')[0]
 
 
-# =========================
-# OPTIONAL TEXT UTILITIES
-# =========================
+# TEXT UTILITIES
 
+#stopwords for basic tokenization
 _STOPWORDS = {
     "the", "and", "is", "in", "to", "of", "a", "for", "on", "with", "as", "by",
     "that", "this", "are", "was", "it", "be", "or", "from", "at", "an", "which",
@@ -111,21 +111,22 @@ _STOPWORDS = {
 
 def tokenizeText(text: str) -> List[str]:
     tokens = re.findall(r"[A-Za-z]{2,}", text.lower())
-    return [token for token in tokens if token not in _STOPWORDS]
+    return [token for token in tokens if token not in _STOPWORDS]   #Removes meaningless stopwords
 
 
 def splitIntoSentences(text: str) -> List[str]:
-    sentences = re.split(r"(?<=[\.\?\!])\s+", text.strip())
-    return [s.replace("\n", " ").strip() for s in sentences if s.strip()]
+    sentences = re.split(r"(?<=[\.\?\!])\s+", text.strip())    #sentence splitting based on punctuation
+    return [s.replace("\n", " ").strip() for s in sentences if s.strip()] 
 
 
 def compressSentence(sentence: str, maxChars: int = 200) -> str:
+    #senctece cutting at common separators
     for separator in [",", ";", " - ", " — ", ":"]:
         if separator in sentence:
             sentence = sentence.split(separator)[0]
             break
 
-    sentence = " ".join(sentence.split())
+    sentence = " ".join(sentence.split())   #Normalizes whitespace
     if len(sentence) > maxChars:
         return sentence[: maxChars - 1].rstrip() + "…"
 

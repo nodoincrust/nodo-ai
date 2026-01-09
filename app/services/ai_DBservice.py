@@ -15,31 +15,24 @@ from app.models import (
     SessionMemorySummary,
 )
 
-
+# this getorcreatesessionfordocument function fetches or creates a chat session for a given document
 def getOrCreateSessionForDocument(document_id: int) -> str:
-    """
-    READ-ONLY helper.
-    Assumes processDocument already created session.
-    """
     db: Session = SessionLocal()
     try:
         ai_doc = (
-            db.query(AIDocument)
+            db.query(AIDocument) #bridge between a Document and an AI Chat Session
             .filter(AIDocument.document_id == document_id)
             .first()
         )
 
+        # shows Document ingestion or session creation is incomplete
         if not ai_doc or not ai_doc.session_id:
-            raise RuntimeError("AI session not initialized for document")
+            raise RuntimeError("AI session not initialized for document")    
 
         return str(ai_doc.session_id)
 
     finally:
         db.close()
-
-# ======================================================
-# DOCUMENT CHUNKS
-# ======================================================
 
 def storeDocumentChunk(
     db: Session,
@@ -93,9 +86,6 @@ def semanticSearchChunks(
         .all()
     )
 
-# ======================================================
-# DOCUMENT SUMMARY
-# ======================================================
 
 def upsertDocumentSummary(
     db: Session,
@@ -135,9 +125,6 @@ def getDocumentSummary(
     )
     return summary.summary_text if summary else None
 
-# ======================================================
-# SESSION MESSAGES
-# ======================================================
 
 def addSessionMessage(
     db: Session,
@@ -186,9 +173,6 @@ def getMessageCount(
         .scalar()
     )
 
-# ======================================================
-# SESSION MEMORY
-# ======================================================
 
 def upsertSessionMemory(
     db: Session,

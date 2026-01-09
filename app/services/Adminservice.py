@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from datetime import datetime,timedelta
+from datetime import datetime, timedelta
 from fastapi import HTTPException, BackgroundTasks
 from jose import jwt
 import os
@@ -14,7 +14,18 @@ from app.models import (
 )
 from app.enum import UserRole, SIDEBAR_MENU
 from app.schemas import CreateCompanySchema, UpdateCompanySchema
-from app.helpers import otp_generate, otp_expiry, send_otp_email, resolve_ui_role,gb_to_bytes,bytes_to_gb,bytes_to_mb
+from app.helpers import (
+    otp_generate,
+    otp_expiry,
+    send_otp_email,
+    resolve_ui_role,
+    gb_to_bytes,
+    bytes_to_gb,
+    bytes_to_mb,
+)
+from datetime import datetime, timedelta
+from fastapi import HTTPException
+from jose import jwt
 
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
@@ -29,55 +40,54 @@ def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Sessi
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    try:
+        db.query(OTPLogin).filter(
+            OTPLogin.user_id == user.id, OTPLogin.is_used.is_(False)
+        ).update({"is_used": True})
 
-    db.query(OTPLogin).filter(
-        OTPLogin.user_id == user.id, OTPLogin.is_used.is_(False)
-    ).update({"is_used": True})
+        # otp = otp_generate()
+        otp = 1234
 
-    # otp = otp_generate()
-    otp = 1234
+        otp_entry = OTPLogin(user_id=user.id, otp_code=otp, expires_at=otp_expiry())
 
-    otp_entry = OTPLogin(user_id=user.id, otp_code=otp, expires_at=otp_expiry())
+        db.add(otp_entry)
+        db.commit()
 
-    db.add(otp_entry)
-    db.commit()
+        background_tasks.add_task(send_otp_email, email, otp)
 
-    background_tasks.add_task(send_otp_email, email, otp)
-
-    return {"message": "OTP sent successfully"}
+        return {"statusCode": 200, "message": "OTP sent successfully"}
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to generate OTP")
 
 
 def get_sidebar_for_user(db: Session, role: str):
-    menus = (
-        db.query(SidebarMenu)
-        .join(RoleSidebarMapping)
-        .filter(RoleSidebarMapping.role == role, SidebarMenu.is_active.is_(True))
-        .order_by(SidebarMenu.sort_order.asc())
-        .all()
-    )
+    try:
+        menus = (
+            db.query(SidebarMenu)
+            .join(RoleSidebarMapping)
+            .filter(RoleSidebarMapping.role == role, SidebarMenu.is_active.is_(True))
+            .order_by(SidebarMenu.sort_order.asc())
+            .all()
+        )
 
-    return [
-        {
-            "id": m.menu_key,
-            "label": m.label,
-            "path": m.path,
-            "icon": m.icon,
-            "icon_active": m.icon_active,
-        }
-        for m in menus
-    ]
+        return [
+            {
+                "id": m.menu_key,
+                "label": m.label,
+                "path": m.path,
+                "icon": m.icon,
+                "icon_active": m.icon_active,
+            }
+            for m in menus
+        ]
 
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to load sidebar menus")
 
-from datetime import datetime, timedelta
-from fastapi import HTTPException
-from jose import jwt
 
 def verify_otp_service(email: str, otp: str, db: Session):
-    user = (
-        db.query(User)
-        .filter(User.email == email, User.is_active.is_(True))
-        .first()
-    )
+    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -96,96 +106,118 @@ def verify_otp_service(email: str, otp: str, db: Session):
 
     if not otp_entry:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+    try:
+        otp_entry.is_used = True
+        user.last_login_at = datetime.utcnow()
+        db.commit()
 
-    otp_entry.is_used = True
-    user.last_login_at = datetime.utcnow()
-    db.commit()
-
-    department = None
-    if user.department_id:
-        department = (
-            db.query(Department)
-            .filter(
-                Department.id == user.department_id,
-                Department.company_id == user.company_id,
-                Department.is_active.is_(True),
-                Department.is_delete.is_(False),
+        department = None
+        print("department", user.department_id)
+        print("company", user.company_id)
+        if user.department_id:
+            department = (
+                db.query(Department)
+                .filter(
+                    Department.id == user.department_id,
+                    Department.company_id == user.company_id,
+                    Department.is_active.is_(True),
+                    Department.is_delete.is_(False),
+                )
+                .first()
             )
-            .first()
+
+        is_department_head = (
+            department is not None and department.head_user_id == user.id
         )
 
-    is_department_head = (
-        department is not None and department.head_user_id == user.id
-    )
+        expire = datetime.utcnow() + timedelta(days=7)
+        print("department", department)
+        payload = {
+            "user_id": user.id,
+            "company_id": user.company_id,
+            "role": user.role.value,
+            "name": user.name,
+            "email": user.email,
+            "exp": expire,
+            "is_department_head": is_department_head,
+            "department_id": department.id if department else None,
+        }
 
-    expire = datetime.utcnow() + timedelta(days=7)
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-    payload = {
-        "user_id": user.id,
-        "company_id": user.company_id,
-        "role": user.role.value,
-        "name": user.name,
-        "email": user.email,
-        "exp": expire,
-        "is_department_head": is_department_head,
-        "department_id": department.id if department else None,
-    }
+        ui_role = resolve_ui_role(payload)
+        sidebar = get_sidebar_for_user(db, ui_role)
+        # static implemetation
+        if user.role.value in ["COMPANY_ADMIN", "EMPLOYEE"]:
+            storage = {
+                "is_storage_show": True,
+                "total_space": 10,
+                "used_space": 4,
+                "used_percentage": 60,
+            }
+        else:
+            storage = {"is_storage_show": False}
 
-    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-    ui_role = resolve_ui_role(payload)
-    sidebar = get_sidebar_for_user(db, ui_role)
-
-    user_data = {
-        "name": user.name,
-        "email": user.email,
-    }
-
-    return {
-        "token": token,
-        "sidebar": sidebar,
-        "is_department_head": is_department_head,
-        "department_id": department.id if department else None,
-        "user": user_data,
-    }
+        return {
+            "statusCode": 200,
+            "message": "Login successful",
+            "data": {
+                "token": token,
+                "sidebar": sidebar,
+                "is_department_head": is_department_head,
+                "department_id": department.id if department else None,
+                "user": {
+                    "name": user.name,
+                    "email": user.email,
+                    "role": user.role.value,
+                    "storage": storage,
+                },
+            },
+        }
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="OTP verification failed")
 
 
 def create_company_service(
     payload: CreateCompanySchema, db: Session, current_user: dict
 ):
-    try:
-        if (
-            db.query(Company)
-            .filter(
-                Company.contact_email == payload.contact_email,
-                Company.is_delete.is_(False),
-            )
-            .first()
-        ):
-            raise HTTPException(
-                status_code=400, detail="Company with this email already exists"
-            )
+    if (
+        db.query(Company)
+        .filter(
+            Company.contact_email == payload.contact_email,
+            Company.is_delete.is_(False),
+        )
+        .first()
+    ):
+        raise HTTPException(
+            status_code=400, detail="Company with this email already exists"
+        )
 
-        if (
-            db.query(User)
-            .filter(User.email == payload.contact_email, User.is_delete.is_(False))
-            .first()
-        ):
-            raise HTTPException(
-                status_code=400, detail="User with this email already exists"
-            )
-        total_space_bytes=gb_to_bytes(payload.total_space)
+    if (
+        db.query(User)
+        .filter(User.email == payload.contact_email, User.is_delete.is_(False))
+        .first()
+    ):
+        raise HTTPException(
+            status_code=400, detail="User with this email already exists"
+        )
+
+    try:
+        total_space_bytes = gb_to_bytes(payload.total_space)
+
         company = Company(
             name=payload.name,
             contact_person=payload.contact_person,
             contact_email=payload.contact_email,
+            contact_number=payload.contact_number,
             total_space=total_space_bytes,
             remaining_space=total_space_bytes,
             created_by=current_user["user_id"],
         )
 
         db.add(company)
-        db.flush()  # get company.id
+        db.flush()
 
         user = User(
             company_id=company.id,
@@ -198,15 +230,16 @@ def create_company_service(
         db.add(user)
         db.commit()
 
-        return {"company_id": company.id, "company_admin_user_id": user.id}
+        return {
+            "statusCode": 200,
+            "message": "Company added successfully",
+            "data": {"company_id": company.id, "company_admin_user_id": user.id},
+        }
 
-    except HTTPException:
+    except Exception:
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail="Failed to create company")
 
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
 
 def list_companies_service(
     db: Session,
@@ -214,6 +247,7 @@ def list_companies_service(
     page: int = 1,
     size: int = 10,
     search: str | None = None,
+    status: str | None = None,
 ):
     offset = (page - 1) * size
 
@@ -230,22 +264,42 @@ def list_companies_service(
                 Company.contact_email.ilike(search_term),
             )
         )
+    if status:
+        if status.lower() == "active":
+            base_query = base_query.filter(Company.is_active.is_(True))
+        elif status.lower() == "inactive":
+            base_query = base_query.filter(Company.is_active.is_(False))
 
     total = base_query.count()
 
     companies = (
-        base_query
-        .order_by(Company.created_at.desc())
-        .offset(offset)
-        .limit(size)
-        .all()
+        base_query.order_by(Company.created_at.desc()).offset(offset).limit(size).all()
     )
+    company_list = []
+    for c in companies:
+        company_list.append(
+            {
+                "id": c.id,
+                "name": c.name,
+                "contact_email": c.contact_email,
+                "contact_person": c.contact_person,
+                "contact_number": c.contact_number,
+                "is_delete": c.is_delete,
+                "is_active": c.is_active,
+                "total_space": bytes_to_gb(c.total_space),
+                "remaining_space": bytes_to_gb(c.remaining_space),
+            }
+        )
 
     return {
+        "statusCode": 200,
+        "message": (
+            "Companies fetched successfully" if total > 0 else "No companies found"
+        ),
         "page": page,
         "size": size,
         "total": total,
-        "data": companies,
+        "data": company_list,
     }
 
 
@@ -259,15 +313,25 @@ def updateStatusCompany(companyId: int, is_active: bool, db: Session, user: dict
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    company.is_active = is_active
-    db.commit()
-    db.refresh(company)
+    if company.created_by != user["user_id"]:
+        raise HTTPException(
+            status_code=403, detail="You are not allowed to update this company"
+        )
 
-    return {
-        "status": 200,
-        "detail": "Company status updated successfully",
-        "data": company,
-    }
+    try:
+        company.is_active = is_active
+        db.commit()
+        db.refresh(company)
+
+        return {
+            "statusCode": 200,
+            "message": "Company status updated successfully",
+            "data": {"company_id": company.id, "is_active": company.is_active},
+        }
+
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update company status")
 
 
 def delete_company_service(companyId: int, db: Session, user: dict):
@@ -280,20 +344,22 @@ def delete_company_service(companyId: int, db: Session, user: dict):
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
+    if company.created_by != user["user_id"]:
+        raise HTTPException(
+            status_code=403, detail="You are not allowed to delete this company"
+        )
+
     try:
         company.is_delete = True
         company.is_active = False
 
         db.query(User).filter(
-            User.company_id == company.id, User.is_active.is_(True)
+            User.company_id == company.id, User.is_delete.is_(False)
         ).update({"is_active": False, "is_delete": True}, synchronize_session=False)
 
         db.commit()
 
-        return {
-            "status": 200,
-            "detail": "Company and associated users deleted successfully",
-        }
+        return {"statusCode": 200, "message": "Company deleted successfully"}
 
     except Exception:
         db.rollback()
@@ -311,6 +377,12 @@ def update_company_details(
 
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+
+    if company.created_by != user["user_id"]:
+        raise HTTPException(
+            status_code=403, detail="You are not allowed to update this company"
+        )
+
     company_admin = (
         db.query(User)
         .filter(
@@ -324,15 +396,8 @@ def update_company_details(
     if not company_admin:
         raise HTTPException(status_code=404, detail="Company admin user not found")
 
-    if payload.name is not None:
-        company.name = payload.name
-
-    if payload.contact_person is not None:
-        company.contact_person = payload.contact_person
-        company_admin.name = payload.contact_person
-
     if payload.contact_email is not None:
-        company_exist = (
+        company_exists = (
             db.query(Company)
             .filter(
                 Company.contact_email == payload.contact_email,
@@ -342,10 +407,11 @@ def update_company_details(
             .first()
         )
 
-        if company_exist:
+        if company_exists:
             raise HTTPException(
                 status_code=400, detail="Company with this email already exists"
             )
+
         user_exists = (
             db.query(User)
             .filter(
@@ -361,41 +427,36 @@ def update_company_details(
                 status_code=400, detail="User with this email already exists"
             )
 
-        company.contact_email = payload.contact_email
-        company_admin.email = payload.contact_email
     try:
+        if payload.name is not None:
+            company.name = payload.name
+
+        if payload.contact_number is not None:
+            company.contact_number = payload.contact_number
+
+        if payload.total_space is not None:
+            company.total_space = payload.total_space
+
+        if payload.is_active is not None:
+            company.is_active = payload.is_active
+
+        if payload.contact_person is not None:
+            company.contact_person = payload.contact_person
+            company_admin.name = payload.contact_person
+
+        if payload.contact_email is not None:
+            company.contact_email = payload.contact_email
+            company_admin.email = payload.contact_email
+
         db.commit()
         db.refresh(company)
 
         return {
-            "status": 200,
-            "detail": "Company and admin user updated successfully",
+            "statusCode": 200,
+            "message": "Company details updated successfully",
             "data": company,
         }
-    except Exception as e:
+
+    except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update company details")
-
-
-def search_companies(query, page, size, db, user):
-    offset = (page - 1) * size
-
-    base_query = db.query(Company).filter(Company.is_delete.is_(False))
-
-    if query:
-        query = query.strip().lower()
-        search = f"%{query}%"
-
-        base_query = base_query.filter(
-            or_(
-                func.lower(Company.name).like(search),
-                func.lower(func.coalesce(Company.contact_person, "")).like(search),
-            )
-        )
-
-    print(base_query.statement.compile(compile_kwargs={"literal_binds": True}))
-
-    companies = base_query.all()
-    print("RESULT COUNT:", len(companies))
-
-    return companies

@@ -7,40 +7,37 @@ from typing import List
 
 logger = logging.getLogger("ai.embedding")
 
-REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)
+REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)  
+EMBED_URL = "http://localhost:11434/api/embeddings"                      # Ollama embedding endpoint
+EMBED_MODEL = "nomic-embed-text"                                        
+EMBED_DIM = 768                                                         
+CACHE_TTL = 86400                                                       
+TIMEOUT = 60                                                           
 
-EMBED_URL = "http://localhost:11434/api/embeddings"
-EMBED_MODEL = "nomic-embed-text"
-EMBED_DIM = 768
-CACHE_TTL = 86400
-TIMEOUT = 60
 
-# Generate stable hash for a text string
 def hashText(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-#Redis keys for namespace embeddings cache
+
 def getCacheKey(text: str) -> str:
-    return f"emb:{hashText(text)}"
+    return f"emb:{hashText(text)}"                                     
 
-#Embedding vector generation (text only) 
+
 def createEmbedding(text: str) -> List[float]:
-
     if not isinstance(text, str):
-        raise TypeError(f"Expected str, got {type(text)}")
+        raise TypeError(f"Expected str, got {type(text)}")              
 
     text = text.strip()
     if not text:
-        raise ValueError("Empty text passed for embedding")
+        raise ValueError("Empty text passed for embedding")              
 
-    cache_key = getCacheKey(text)       #Generates a deterministic Redis key
-    #cache fetch embedding
+    cache_key = getCacheKey(text)
     cached = REDIS.get(cache_key)
     if cached:
         vec = json.loads(cached)
         if isinstance(vec, list) and len(vec) == EMBED_DIM:
-            return vec
-        REDIS.delete(cache_key)
+            return vec                                                   
+        REDIS.delete(cache_key)                                         
 
     payload = {
         "model": EMBED_MODEL,
@@ -54,31 +51,24 @@ def createEmbedding(text: str) -> List[float]:
     )
 
     if response.status_code != 200:
-        logger.error("Ollama embedding failed: %s", response.text)
-        raise RuntimeError("Embedding generation failed")
+        logger.error("Embedding generation failed: %s", response.text)
+        raise RuntimeError("Embedding generation failed")                
 
     data = response.json()
     embedding = data.get("embedding")
 
     if not isinstance(embedding, list):
-        raise RuntimeError("Invalid embedding format from Ollama")
+        raise RuntimeError("Invalid embedding format")                   
 
     if len(embedding) != EMBED_DIM:
-        raise RuntimeError(
-            f"Invalid embedding dimension {len(embedding)}"
-        )
-    #cache store embeddings
-    REDIS.setex(cache_key, CACHE_TTL, json.dumps(embedding))
+        raise RuntimeError(f"Invalid embedding dimension {len(embedding)}")
+
+    REDIS.setex(cache_key, CACHE_TTL, json.dumps(embedding))            
     return embedding
 
+
 def createEmbeddings(texts: List[str]) -> List[List[float]]:
-    #Batch embedding generation
     if not isinstance(texts, list):
-        raise TypeError("createEmbeddings expects a list of strings")
+        raise TypeError("createEmbeddings expects a list of strings")     # Validates batch input
 
-    embeddings: List[List[float]] = []
-
-    for text in texts:
-        embeddings.append(createEmbedding(text))        #Generates embeddings for each text
-
-    return embeddings
+    return [createEmbedding(text) for text in texts]                     # Generates embeddings sequentially

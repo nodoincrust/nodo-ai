@@ -3,18 +3,15 @@ from app.services.Companyservice import (
     add_employee_service,
     update_employee_service,
     delete_employee_details,
-    updateStatusEmployee,
     get_employee_list,
 )
 from app.db import SessionLocal
 from app.schemas import (
     CreateEmployeeSchema,
     UpdateEmployeeSchema,
-    UpdateEmployeeStatusSchema,
 )
 from sqlalchemy.orm import Session
 from app.helpers import get_current_user
-from app.enum import UserRole
 
 router = APIRouter(prefix="/nodo/department")
 
@@ -61,21 +58,6 @@ def delete_Employee(
         raise HTTPException(403, "Unauthorized access")
 
     return delete_employee_details(empId=empId, db=db, current_user=current_user)
-
-
-@router.put("/employee/{empId}/status")
-def updDeptStatusEmp(
-    empId: int,
-    payload: UpdateEmployeeStatusSchema,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    if not current_user.get("is_department_head"):
-        raise HTTPException(403, "Unauthorized access")
-
-    return updateStatusEmployee(
-        empId=empId, is_active=payload.is_active, db=db, current_user=current_user
-    )
 
 
 @router.get("/getEmpList")

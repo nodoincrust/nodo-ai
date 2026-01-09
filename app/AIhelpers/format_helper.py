@@ -11,8 +11,7 @@ from app.ocr import safe_ocr
 
 
 def iterateFilePages(filePath: str) -> Iterator[Tuple[int, str, bool]]:
-    # determine file type and use appropriate extractor
-    extension = os.path.splitext(filePath)[1].lower()
+    extension = os.path.splitext(filePath)[1].lower()                    # Detects file extension
 
     if extension == ".pdf":
         yield from extractPdf(filePath)
@@ -27,9 +26,9 @@ def iterateFilePages(filePath: str) -> Iterator[Tuple[int, str, bool]]:
     elif extension in [".png", ".jpg", ".jpeg"]:
         yield from extractImage(filePath)
     else:
-        raise ValueError(f"Unsupported file type: {extension}")
+        raise ValueError(f"Unsupported file type: {extension}")          # Rejects unsupported formats
 
-#Text extractors
+
 def extractPdf(path: str):
     document = fitz.open(path)
     pageNumber = 1
@@ -37,7 +36,6 @@ def extractPdf(path: str):
     for page in document:
         text_blocks = []
 
-        # Extract text blocks
         blocks = page.get_text("blocks")
         for block in blocks:
             block_text = block[4].strip()
@@ -47,7 +45,6 @@ def extractPdf(path: str):
         if text_blocks:
             yield pageNumber, "\n".join(text_blocks), False
         else:
-            #OCR fallback of images and embedded images
             pix = page.get_pixmap(dpi=200)
             image = Image.frombytes(
                 "RGB",
@@ -62,11 +59,10 @@ def extractPdf(path: str):
 
 
 def extractDocx(path: str):
-    document = docx.Document(path) #
+    document = docx.Document(path)
     buffer = []
     pageNumber = 1
 
-    #Groups paragraphs into page-sized chunks
     def flush():
         nonlocal buffer, pageNumber
         if buffer:
@@ -74,7 +70,6 @@ def extractDocx(path: str):
             buffer = []
             pageNumber += 1
 
-    # Text paragraphs
     for para in document.paragraphs:
         text = para.text.strip()
         if text:
@@ -84,7 +79,6 @@ def extractDocx(path: str):
 
     yield from flush()
 
-    # Embedded images fallbace to OCR
     for rel in document.part._rels.values():
         if "image" in rel.reltype:
             try:
@@ -96,8 +90,9 @@ def extractDocx(path: str):
             except Exception:
                 continue
 
+
 def extractExcel(path: str):
-    sheets = pd.read_excel(path, sheet_name=None)           #Loads all sheets into DataFrames
+    sheets = pd.read_excel(path, sheet_name=None)
     pageNumber = 1
 
     for sheetName, df in sheets.items():
@@ -110,8 +105,6 @@ def extractExcel(path: str):
             values = [str(v) for v in row if pd.notna(v)]
             if values:
                 rows.append(" | ".join(values))
-
-            # Flush every ~10 rows
             if len(rows) >= 10:
                 yield pageNumber, f"[SHEET: {sheetName}]\n" + "\n".join(rows), False
                 rows = []
@@ -120,6 +113,7 @@ def extractExcel(path: str):
         if rows:
             yield pageNumber, f"[SHEET: {sheetName}]\n" + "\n".join(rows), False
             pageNumber += 1
+
 
 def extractCsv(path: str):
     rows = []
@@ -130,7 +124,6 @@ def extractCsv(path: str):
         for row in reader:
             if row:
                 rows.append(" | ".join(row))
-
             if len(rows) >= 15:
                 yield pageNumber, "\n".join(rows), False
                 rows = []
@@ -138,6 +131,7 @@ def extractCsv(path: str):
 
     if rows:
         yield pageNumber, "\n".join(rows), False
+
 
 def extractTxt(path: str):
     with open(path, encoding="utf-8", errors="ignore") as file:
@@ -156,9 +150,10 @@ def extractTxt(path: str):
     if buffer:
         yield pageNumber, "\n".join(buffer), False
 
+
 def extractImage(path: str):
     image = Image.open(path)
-    text = safe_ocr(image)      #run OCR on image
+    text = safe_ocr(image)
 
     if text.strip():
         yield 1, text, True

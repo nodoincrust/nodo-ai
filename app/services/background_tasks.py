@@ -4,14 +4,13 @@ from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from app.db import SessionLocal
-from app.models import SessionMessage, SessionMemory
+from app.models import SessionMessage, SessionMemorySummary
 from app.services.memory_service import updateMemorySummary
 
 logger = logging.getLogger("ai.backgroundTasks")
 
-
-MEMORY_UPDATE_INTERVAL = 10   # messages
-MAX_WORKERS = 4               # threads only
+MEMORY_UPDATE_INTERVAL = 10                             # Triggers memory update every N messages
+MAX_WORKERS = 4                                         # Limits background thread usage
 
 _executor: Optional[ThreadPoolExecutor] = None
 
@@ -20,11 +19,10 @@ def getExecutor() -> ThreadPoolExecutor:
     global _executor
     if _executor is None:
         _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-    return _executor
+    return _executor                                    # Lazily initializes executor
 
 
 def submitMemoryUpdate(sessionId: str) -> None:
-    # Schedule memory summarization safely.
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -35,7 +33,7 @@ def submitMemoryUpdate(sessionId: str) -> None:
         getExecutor(),
         runMemoryUpdate,
         sessionId,
-    )
+    )                                                    # Schedules memory update asynchronously
 
 
 def runMemoryUpdate(sessionId: str) -> None:
@@ -48,15 +46,16 @@ def runMemoryUpdate(sessionId: str) -> None:
         )
 
         if messageCount == 0 or messageCount % MEMORY_UPDATE_INTERVAL != 0:
-            return
+            return                                      # Skips update unless threshold reached
 
         existing = (
-            db.query(SessionMemory)
+            db.query(SessionMemorySummary)
             .filter_by(session_id=sessionId)
             .first()
         )
+
         if existing and existing.updated_at:
-            return
+            return                                      # Prevents duplicate updates
 
         logger.info(
             "Updating memory summary session=%s messages=%s",
@@ -68,7 +67,7 @@ def runMemoryUpdate(sessionId: str) -> None:
             db,
             sessionId=sessionId,
             messageCount=messageCount,
-        )
+        )                                                # Generates summarized memory
         db.commit()
 
     except Exception:
@@ -79,7 +78,7 @@ def runMemoryUpdate(sessionId: str) -> None:
         db.rollback()
 
     finally:
-        db.close()
+        db.close()                                      # Ensures DB session cleanup
 
 
 def shutdownExecutor() -> None:
@@ -87,4 +86,4 @@ def shutdownExecutor() -> None:
     if _executor:
         logger.info("Shutting down background executor")
         _executor.shutdown(wait=False, cancel_futures=True)
-        _executor = None
+        _executor = None                                # Gracefully shuts down threads

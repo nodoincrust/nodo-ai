@@ -24,6 +24,7 @@ from pgvector.sqlalchemy import Vector
 from app.db import Base
 from app.enum import UserRole
 
+
 class User(Base):
     __tablename__ = "users"
 
@@ -32,7 +33,7 @@ class User(Base):
     company_id = Column(
         BigInteger,
         ForeignKey("companies.id"),
-        nullable=True,  # SYSTEM_ADMIN allowed
+        nullable=True,
     )
 
     role = Column(Enum(UserRole, name="user_role_enum"), nullable=False, index=True)
@@ -71,6 +72,7 @@ class Company(Base):
     name = Column(String(255), nullable=False)
     contact_person = Column(String(255))
     contact_email = Column(String(255), unique=False, nullable=False)
+    contact_number = Column(String(10), unique=True, nullable=False)
 
     created_by = Column(
         BigInteger,
@@ -146,7 +148,14 @@ class Department(Base):
 # from db import Base
 EMBEDDING_DIMENSION = 768
 
-# Document Model
+class ChatSession(Base):
+    __tablename__ = "sessions"
+
+    session_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -156,26 +165,14 @@ class Document(Base):
     department_id = Column(BigInteger, ForeignKey("departments.id"), nullable=False)
     uploaded_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
 
-    status = Column(
-        Enum(
-            "DRAFT",
-            "SUBMITTED",
-            "UNDER_REVIEW",
-            "APPROVED",
-            "REJECTED",
-            name="document_status_enum",
-        ),
-        default="DRAFT",
-        nullable=False,
-    )
-
+    status = Column(String, default="DRAFT", nullable=False)
     current_version = Column(Integer, default=1)
-    is_active = Column(Boolean, default=True)
-    is_delete = Column(Boolean, default=False)
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_delete = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # One to One relationship with AIDocument
     ai_document = relationship(
         "AIDocument",
         back_populates="document",
@@ -183,15 +180,18 @@ class Document(Base):
         cascade="all, delete-orphan",
     )
 
-#AI Document Model
+
 class AIDocument(Base):
     __tablename__ = "ai_documents"
 
-    id=Column(BigInteger, primary_key=True)
+    id = Column(BigInteger, primary_key=True)
 
-    # Foreign key to docuements.id
     document_id = Column(
-        BigInteger, ForeignKey("documents.id"), nullable=False, index=True
+        BigInteger,
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
     )
 
     session_id = Column(
@@ -199,6 +199,7 @@ class AIDocument(Base):
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
+        index=True,
     )
 
     filename = Column(String(512), nullable=False)
@@ -207,17 +208,14 @@ class AIDocument(Base):
 
     created_at = Column(DateTime, server_default=func.now())
 
-    #relationship back to Document
     document = relationship("Document", back_populates="ai_document")
 
-    #relationship to DocumentChunk
     chunks = relationship(
         "DocumentChunk",
         back_populates="ai_document",
         cascade="all, delete-orphan",
     )
 
-    #relationship to DocumentSummary
     summary = relationship(
         "DocumentSummary",
         back_populates="ai_document",
@@ -225,35 +223,23 @@ class AIDocument(Base):
         cascade="all, delete-orphan",
     )
 
-#chat session model : defines one chat session per document
-class ChatSession(Base):
-    __tablename__ = "sessions"
-
-    session_id = Column(
-        PG_UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    last_active = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-# Document Chunk Model
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    document_id = Column(
+    ai_document_id = Column(
         BigInteger,
         ForeignKey("ai_documents.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
 
     session_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
 
     chunk_index = Column(Integer, nullable=False)
@@ -267,35 +253,32 @@ class DocumentChunk(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "document_id",
+            "ai_document_id",
             "chunk_index",
-            name="uq_document_chunk_index",
+            name="uq_ai_document_chunk_index",
         ),
     )
 
-# Document Summary Model
 class DocumentSummary(Base):
     __tablename__ = "document_summaries"
 
-    document_id = Column(
+    ai_document_id = Column(
         BigInteger,
         ForeignKey("ai_documents.id", ondelete="CASCADE"),
         primary_key=True,
     )
 
     summary_text = Column(Text, nullable=False)
-    tags = Column(JSONB)
-    citations = Column(JSONB)
+    tags = Column(JSONB, default=list)
+    citations = Column(JSONB, default=list)
 
     created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
 
-    # relationship back to AIDocument
-    ai_document = relationship("AIDocument", back_populates="summary") 
+    ai_document = relationship("AIDocument", back_populates="summary")
 
 
-# session messages (chat history)
-class   SessionMessage(Base):
+class SessionMessage(Base):
     __tablename__ = "session_messages"
 
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -304,12 +287,14 @@ class   SessionMessage(Base):
         PG_UUID(as_uuid=True),
         ForeignKey("sessions.session_id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
 
-    document_id = Column(
+    ai_document_id = Column(
         BigInteger,
         ForeignKey("ai_documents.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
 
     role = Column(String, nullable=False)
@@ -322,7 +307,10 @@ class   SessionMessage(Base):
     )
 
 
-# Session Memory Summary Model
+# =====================================================
+# SESSION MEMORY SUMMARY (LONG-TERM MEMORY)
+# =====================================================
+
 class SessionMemorySummary(Base):
     __tablename__ = "session_memory_summaries"
 
@@ -343,7 +331,7 @@ class SidebarMenu(Base):
     label = Column(String(100), nullable=False)
     path = Column(String(255), nullable=False)
     icon = Column(Text)
-    icon_active=Column(Text)
+    icon_active = Column(Text)
     sort_order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
 
@@ -358,6 +346,7 @@ class RoleSidebarMapping(Base):
     )
 
     menu = relationship("SidebarMenu")
+
 
 class DocumentVersion(Base):
     __tablename__ = "document_versions"
@@ -379,6 +368,7 @@ class DocumentVersion(Base):
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
 class DocumentReview(Base):
     __tablename__ = "document_reviews"
 
@@ -392,4 +382,21 @@ class DocumentReview(Base):
     )
 
     comments = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DocumentApprovalStep(Base):
+    __tablename__ = "document_approval_steps"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
+
+    step_order = Column(Integer, nullable=False)
+    assigned_to = Column(Integer, ForeignKey("users.id"), nullable=False)
+    approver_type = Column(String, nullable=False)
+
+    status = Column(String, default="PENDING")
+
+    remarks = Column(String)
+    action_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)

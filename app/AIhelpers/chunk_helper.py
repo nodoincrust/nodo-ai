@@ -4,21 +4,23 @@ from sqlalchemy.orm import Session
 from app.models import DocumentChunk
 from app.AIhelpers.embedding_helper import createEmbedding
 
+
 def chunkText(
     text: str,
     chunkSize: int = 500,
     overlap: int = 80,
 ) -> List[str]:
-    words = text.split()
+    words = text.split()                          # Tokenizes text by whitespace
     chunks: List[str] = []
     startIndex = 0
 
     while startIndex < len(words):
         endIndex = startIndex + chunkSize
         chunks.append(" ".join(words[startIndex:endIndex]))
-        startIndex += chunkSize - overlap
+        startIndex += chunkSize - overlap          # Applies overlap for context continuity
 
     return chunks
+
 
 def chunkTextFromPages(
     pages: Iterable[Any],
@@ -45,7 +47,6 @@ def chunkTextFromPages(
                 "text": " ".join(wordBuffer[:chunkSize]),
                 "page": pageBuffer[0],
             }
-
             wordBuffer = wordBuffer[chunkSize - overlap :]
             pageBuffer = pageBuffer[chunkSize - overlap :]
 
@@ -55,10 +56,10 @@ def chunkTextFromPages(
             "page": pageBuffer[0],
         }
 
+
 def _flat(vec):
-    if isinstance(vec, list) and vec and isinstance(vec[0], list):
-        return vec[0]
-    return vec
+    return vec[0] if isinstance(vec, list) and vec and isinstance(vec[0], list) else vec  # Normalizes embedding shape
+
 
 def createDocumentChunks(
     *,
@@ -82,13 +83,13 @@ def createDocumentChunks(
         page_number = chunk["page"]
 
         if not text:
-            continue
+            continue                               # Skips empty chunks
 
-        embedding = _flat(createEmbedding(text))
+        embedding = _flat(createEmbedding(text))   # Generates vector embedding
 
         db.add(
             DocumentChunk(
-                document_id=ai_document_id,
+                ai_document_id=ai_document_id,
                 session_id=session_id,
                 chunk_index=chunk_index,
                 chunk_text=text,
@@ -99,5 +100,5 @@ def createDocumentChunks(
 
         chunk_index += 1
 
-    db.commit()
+    db.commit()                                    # Persists all chunks atomically
     return chunk_index

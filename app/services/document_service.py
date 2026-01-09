@@ -1,7 +1,8 @@
 import logging
 import shutil
 import os
-from typing import Dict, List
+import uuid
+from typing import Dict
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 
@@ -10,9 +11,11 @@ from app.models import (
     Document,
     AIDocument,
     ChatSession,
+    DocumentChunk,
     DocumentVersion,
     DocumentReview,
     Company,
+    DocumentSummary,
 )
 from app.AIhelpers.chunk_helper import createDocumentChunks
 from app.AIhelpers.format_helper import iterateFilePages
@@ -24,11 +27,11 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_MB = 50
 CHUNK_BATCH_SIZE = 32
 
-#Core document processing function
+
 def processDocument(
     *,
     filePath: str,
-    document_id: int,     # documents.id
+    document_id: int,
     filename: str,
     fileType: str,
     fileSizeMb: float,
@@ -38,56 +41,50 @@ def processDocument(
     ocrUsed = False
 
     try:
-        #Checks if AI metadata already exists
-        ai_doc = (
+        session = ChatSession()                          # Creates a new chat session
+        db.add(session)
+        db.flush()
+
+        aiDocument = (
             db.query(AIDocument)
             .filter(AIDocument.document_id == document_id)
             .first()
         )
 
-        if not ai_doc:
-            session = ChatSession() #creates new chat session for document
-            db.add(session)
-            db.flush()
-
-            #maping with ai_document record
-            ai_doc = AIDocument(
+        if not aiDocument:
+            aiDocument = AIDocument(
                 document_id=document_id,
                 session_id=session.session_id,
                 filename=filename,
                 file_type=fileType,
                 file_size_mb=fileSizeMb,
             )
-            db.add(ai_doc)
+            db.add(aiDocument)
             db.commit()
+        else:
+            session.session_id = aiDocument.session_id    # Reuses existing session
 
-        pages: List[tuple] = []
+        chunksCreated = 0                                 # Initializes chunk counter
 
-        #iterates through file pages to extract text (with OCR if needed)
-        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):  
+        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
             if not rawText or not rawText.strip():
                 continue
 
-            ocrUsed |= usedOcr   #flag if any page used OCR
-            pages.append((pageNumber, rawText))
+            ocrUsed |= usedOcr
 
-        if not pages:
-            return {
-                "status": "processing",
-                "message": "No readable text extracted",
-            }
-        #Splits text into chunks, generates embeddings, and stores
-        chunksCreated = createDocumentChunks(
-            db=db,
-            ai_document_id=ai_doc.id,          
-            session_id=str(ai_doc.session_id),
-            pages=pages,
-        )
+            chunksCreated += createDocumentChunks(
+                db=db,
+                ai_document_id=aiDocument.id,
+                session_id=aiDocument.session_id,
+                pages=[(pageNumber, rawText)],
+            )                                             # Creates vector chunks
+
+        db.commit()
 
         return {
             "status": "success",
             "document_id": document_id,
-            "session_id": str(ai_doc.session_id),
+            "session_id": str(aiDocument.session_id),
             "chunks": chunksCreated,
             "ocr_used": ocrUsed,
             "file_size_mb": round(fileSizeMb, 2),
@@ -100,7 +97,6 @@ def processDocument(
 
     finally:
         db.close()
-
 
 def saveDocument(
     db: Session,
@@ -125,7 +121,7 @@ def saveDocument(
         raise HTTPException(403, "Permission denied")
 
     if document.status != "DRAFT":
-        raise HTTPException(400, "Only draft documents can be saved")
+        raise HTTPException(400, "Only draft documents can be edited")
 
     version = (
         db.query(DocumentVersion)
@@ -143,7 +139,21 @@ def saveDocument(
     if payload.tags is not None:
         version.tags = payload.tags
 
-    document.status = "SUBMITTED"
+    ai_document = (
+        db.query(AIDocument)
+        .filter(AIDocument.document_id == document.id)
+        .first()
+    )
+
+    if not ai_document:
+        raise HTTPException(500, "AI document not found")
+
+    if payload.summary is not None:
+        ai_document.summary = DocumentSummary(
+            summary_text=payload.summary,
+            tags=payload.tags or [],
+            citations=[],
+        )
 
     review = DocumentReview(
         document_id=document.id,
@@ -157,13 +167,14 @@ def saveDocument(
     return {
         "documentId": document.id,
         "status": document.status,
+        "summary": version.summary,
+        "tags": version.tags,
     }
 
 
 def createDocumentDraft(
     db: Session,
     *,
-    aidocumentId: int,
     tempFilePath: str,
     originalFilename: str,
     departmentId: int,
@@ -214,7 +225,7 @@ def createDocumentDraft(
         file_path=permanentPath,
         file_name=originalFilename,
         file_size_bytes=fileSizeBytes,
-        ai_document_id=aidocumentId,
+        ai_document_id=None,
         created_by=currentUser["user_id"],
     )
 
@@ -223,3 +234,46 @@ def createDocumentDraft(
     db.commit()
 
     return document.id
+
+def get_document_full_details(db: Session, document_id: int) -> dict:
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.is_delete.is_(False),
+        )
+        .first()
+    )
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    ai_document = (
+        db.query(AIDocument)
+        .filter(AIDocument.document_id == document.id)
+        .first()
+    )
+
+    summary = None
+    if ai_document:
+        summary_record = (
+            db.query(DocumentSummary)
+            .filter(DocumentSummary.ai_document_id == ai_document.id)
+            .first()
+        )
+        if summary_record:
+            summary = {
+                "summary": summary_record.summary_text,
+                "tags": summary_record.tags,
+                "citations": summary_record.citations,
+            }
+
+    return {
+        "document_id": document.id,
+        "status": document.status,
+        "current_version": document.current_version,
+        "created_at": document.created_at,
+        "ai_ready": bool(ai_document),
+        "session_id": str(ai_document.session_id) if ai_document else None,
+        "summary": summary,
+    }

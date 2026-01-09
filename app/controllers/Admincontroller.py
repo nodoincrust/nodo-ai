@@ -7,14 +7,14 @@ from app.services.Adminservice import (
     updateStatusCompany,
     delete_company_service,
     update_company_details,
-    search_companies,
 )
 from app.db import SessionLocal
 from app.schemas import (
     VerifyOTPSchema,
     CreateCompanySchema,
     UpdateCompanyStatusSchema,
-    UpdateCompanySchema,GetCompaniesRequest
+    UpdateCompanySchema,
+    GetCompaniesRequest,
 )
 from sqlalchemy.orm import Session
 from app.helpers import get_current_user
@@ -58,9 +58,10 @@ def addCompany(
 
     return create_company_service(payload=payload, db=db, current_user=current_user)
 
+
 @router.post("/getCompanies")
 def companiesList(
-   payload: GetCompaniesRequest,
+    payload: GetCompaniesRequest,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -73,8 +74,8 @@ def companiesList(
         page=payload.page,
         size=payload.pagelimit,
         search=payload.search,
+        status=payload.status,
     )
-
 
 
 @router.put("/companies/{companyId}/status")
@@ -92,7 +93,7 @@ def updCompanyStatus(
     )
 
 
-@router.put("/deleteCompany/{companyId}")
+@router.delete("/deleteCompany/{companyId}")
 def delete_company(
     companyId: int, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
@@ -118,15 +119,3 @@ def update_company(
         companyId=companyId, payload=payload, db=db, user=user
     )
 
-
-@router.get("/search")
-def search(
-    query: str | None = Query(default=None, min_length=1),
-    page: int = 1,
-    size: int = 10,
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    if user["role"] != UserRole.SYSTEM_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Unauthorized access")
-    return search_companies(query=query, page=page, size=size, db=db, user=user)

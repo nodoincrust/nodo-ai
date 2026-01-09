@@ -22,6 +22,14 @@ class ApprovalStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+ROLE_LEVEL = {
+    "EMPLOYEE": 1,
+    "SENIOR": 2,
+    "DEPARTMENT_HEAD": 3,
+    "COMPANY_ADMIN": 4,
+}
+
+
 SIDEBAR_MENU = {
     UserRole.SYSTEM_ADMIN: [
         {"key": "dashboard", "label": "Dashboard", "path": "/dashboard"},
@@ -47,4 +55,11 @@ SIDEBAR_MENU = {
         {"key": "dashboard", "label": "Dashboard", "path": "/dashboard"},
         {"key": "my_docs", "label": "My Documents", "path": "/documents/my"},
     ],
+}
+
+
+ROLE_ORDER = {
+    UserRole.EMPLOYEE: 1,
+    UserRole.DEPARTMENT_HEAD: 2,
+    UserRole.COMPANY_ADMIN: 3,
 }

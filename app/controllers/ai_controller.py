@@ -101,23 +101,22 @@ async def uploadDocument(
         if tempPath and os.path.exists(tempPath):
             os.remove(tempPath)
 
-
 @router.get("/chat")
 def chatApi(*, document_id: int, query: str):
     if not document_id:
-        raise HTTPException(status_code=400, detail="document_id is required")
+        raise HTTPException(status_code=400, detail="document_id is required")  # Validates input
 
-    sessionId = getOrCreateSessionForDocument(document_id)
+    session_id = getOrCreateSessionForDocument(document_id)
 
     result = chatWithDocument(
         document_id=document_id,   
-        session_id=sessionId,      
+        session_id=session_id,      
         query=query,
-    )
+    )                                                                     # Executes chat pipeline
 
     return {
         "document_id": document_id,
-        "session_id": sessionId,
+        "session_id": session_id,
         "answer": result["answer"],
         "citations": result.get("citations", []),
     }

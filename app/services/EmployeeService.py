@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from sqlalchemy import or_, cast
+from sqlalchemy import or_, cast,func
 from app.enum import UserRole, ROLE_ORDER
 from sqlalchemy.dialects.postgresql import TEXT
 from app.models import DocumentVersion, Document, User, Department, DocumentApprovalStep
@@ -28,15 +28,14 @@ def get_documents_service(
     if status:
         query = query.filter(Document.status == status)
     if search:
-        search_pattern = f"%{search}%"
-
+        search_pattern = f"%{search.lower()}%"
         query = query.filter(
-            or_(
-                DocumentVersion.file_name.ilike(search_pattern),
-                cast(Document.status, TEXT).ilike(search_pattern),
-                DocumentVersion.tags.op("?")(search),
-            )
+        or_(
+            func.lower(DocumentVersion.file_name).like(search_pattern),
+            func.lower(cast(DocumentVersion.tags, TEXT)).like(search_pattern),
         )
+    )
+
 
     total = query.count()
 
@@ -209,7 +208,7 @@ def assign_document(
             )
         )
 
-    document.status = "IN_REVIEW"
+    document.status = "SUBMITTED"
     document.current_step_order = 1
     document.current_assignee_id = assignee_ids[0]
 

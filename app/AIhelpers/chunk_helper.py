@@ -57,10 +57,9 @@ def chunkTextFromPages(
         }
 
 
-def _flat(vec):
-    return vec[0] if isinstance(vec, list) and vec and isinstance(vec[0], list) else vec  # Normalizes embedding shape
-
-
+# =========================
+# DOCUMENT INGESTION (BATCHED)
+# =========================
 def createDocumentChunks(
     *,
     db: Session,
@@ -70,10 +69,14 @@ def createDocumentChunks(
     start_index: int = 0,
     chunkSize: int = 512,
     overlap: int = 60,
+    EMBED_BATCH_SIZE: int = 16,   # ✅ MUST MATCH embedding helper
 ) -> int:
 
-    chunksCreated = 0
     chunk_index = start_index
+    chunks_created = 0
+
+    texts: List[str] = []
+    pages_meta: List[int | None] = []
 
     for chunk in chunkTextFromPages(
         pages,
@@ -82,26 +85,51 @@ def createDocumentChunks(
         includePageNumber=True,
     ):
         text = chunk["text"].strip()
-        page_number = chunk["page"]
-
         if not text:
-            continue  # Skip empty chunks
+            continue
 
-        embedding = _flat(createEmbeddings([text])[0])
+        texts.append(text)
+        pages_meta.append(chunk["page"])
 
-        db.add(
-            DocumentChunk(
-                id=uuid.uuid4(),
-                ai_document_id=ai_document_id,
-                session_id=session_id,
-                chunk_index=chunk_index,
-                chunk_text=text,
-                embedding=embedding,
-                page_number=page_number,
+        # 🔥 BATCH FLUSH
+        if len(texts) == EMBED_BATCH_SIZE:
+            vectors = createEmbeddings(texts)
+
+            for vec, txt, page in zip(vectors, texts, pages_meta):
+                db.add(
+                    DocumentChunk(
+                        id=uuid.uuid4(),
+                        ai_document_id=ai_document_id,
+                        session_id=session_id,
+                        chunk_index=chunk_index,
+                        chunk_text=txt,
+                        embedding=vec,
+                        page_number=page,
+                    )
+                )
+                chunk_index += 1
+                chunks_created += 1
+
+            texts.clear()
+            pages_meta.clear()
+
+    # 🔁 Flush remaining chunks
+    if texts:
+        vectors = createEmbeddings(texts)
+
+        for vec, txt, page in zip(vectors, texts, pages_meta):
+            db.add(
+                DocumentChunk(
+                    id=uuid.uuid4(),
+                    ai_document_id=ai_document_id,
+                    session_id=session_id,
+                    chunk_index=chunk_index,
+                    chunk_text=txt,
+                    embedding=vec,
+                    page_number=page,
+                )
             )
-        )
+            chunk_index += 1
+            chunks_created += 1
 
-        chunk_index += 1
-        chunksCreated += 1
-
-    return chunksCreated
+    return chunks_created

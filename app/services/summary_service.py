@@ -9,15 +9,17 @@ from app.AIhelpers.llm_helper import askLlm
 
 logger = logging.getLogger("ai.summaryService")
 
-SUMMARY_TOP_K = 12                 # Limits chunks to control latency
+SUMMARY_TOP_K = 20                 # Limits chunks to control latency
 MAX_CONTEXT_CHARS = 7000           # Prevents token overflow
 
 BASE_SYSTEM_PROMPT = """
 You are an enterprise document intelligence system.
 STRICT RULES:
-- Return ONLY valid JSON.
-- NO markdown code blocks.
-- Summary must be 10–15 lines excluding tags and citations.
+ Return ONLY valid JSON.
+ NO markdown code blocks.
+ The summary MUST be written in FULL 2 PARAGRAPHS.
+ Bullet points, hyphens, or numbered lists are STRICTLY FORBIDDEN.
+ Each line MUST be a complete explanatory sentence.
 
 OUTPUT FORMAT (MANDATORY):
 {

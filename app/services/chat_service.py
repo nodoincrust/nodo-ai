@@ -1,18 +1,31 @@
+from typing import List, Tuple
 from sqlalchemy.orm import Session
+
 from app.db import SessionLocal
 from app.models import (
     AIDocument,
-    DocumentSummary,
     DocumentChunk,
+    DocumentSummary,
     SessionMessage,
 )
+from app.AIhelpers.embedding_helper import createEmbedding
 from app.AIhelpers.llm_helper import askLlm
 
-# Fetches recent messages only
+
+# =========================
+# CONFIG
+# =========================
+TOP_K = 5               # number of chunks to retrieve
+MAX_CHAT_HISTORY = 6    # recent messages only
+
+
+# =========================
+# HELPERS
+# =========================
 def load_recent_chat_history(
     db: Session,
     session_id: str,
-    limit: int = 6,
+    limit: int = MAX_CHAT_HISTORY,
 ) -> str:
     messages = (
         db.query(SessionMessage)
@@ -20,7 +33,7 @@ def load_recent_chat_history(
         .order_by(SessionMessage.created_at.desc())
         .limit(limit)
         .all()
-    )  
+    )
 
     messages.reverse()
 
@@ -30,112 +43,172 @@ def load_recent_chat_history(
     )
 
 
+def semantic_search_chunks(
+    db: Session,
+    *,
+    ai_document_id: int,
+    query_embedding: List[float],
+    top_k: int = TOP_K,
+) -> List[DocumentChunk]:
+    """
+    Pure embedding-based semantic search.
+    NO LLM calls here.
+    SAFE for numpy / pgvector / list embeddings.
+    """
+
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.ai_document_id == ai_document_id)
+        .all()
+    )
+
+    scored: List[Tuple[float, DocumentChunk]] = []
+
+    for chunk in chunks:
+        # ✅ SAFE embedding check (CRITICAL FIX)
+        if chunk.embedding is None or len(chunk.embedding) == 0:
+            continue
+
+        # Dot-product similarity (nomic vectors are normalized)
+        score = sum(
+            qe * ce
+            for qe, ce in zip(query_embedding, chunk.embedding)
+        )
+
+        scored.append((score, chunk))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    return [chunk for _, chunk in scored[:top_k]]
+
+
+# =========================
+# MAIN CHAT API
+# =========================
 def chatWithDocument(
     *,
     document_id: int,
     session_id: str,
     query: str,
 ) -> dict:
+    """
+    🔥 EMBEDDING-BASED DOCUMENT CHAT
+    - ONE embedding call
+    - ONE LLM call
+    """
 
-    with SessionLocal() as db:  # Opens DB session
+    with SessionLocal() as db:
 
-        # Handle chat-history recall deterministically
-        if "last chat" in query.lower() or "previous chat" in query.lower() or "what we talk" in query.lower():
-            messages = (
-                db.query(SessionMessage)
-                .filter(SessionMessage.session_id == session_id)
-                .order_by(SessionMessage.created_at.asc())
-                .all()
-            )
-
-            if not messages:
-                answer = "This is the beginning of our conversation."
-            else:
-                lines = []
-                for m in messages:
-                    who = "You asked" if m.role == "user" else "I answered"
-                    lines.append(f"{who}: {m.content}")
-                answer = "In our previous chat:\n" + "\n".join(lines)
-
-            db.add_all([
-                SessionMessage(session_id=session_id, role="user", content=query),
-                SessionMessage(session_id=session_id, role="assistant", content=answer),
-            ])  # Stores recall interaction
-            db.commit()
-
-            return {"status": "success", "answer": answer, "citations": []}
-
+        # ---------------------------------
+        # 1️⃣ Resolve AI document
+        # ---------------------------------
         ai_doc = (
             db.query(AIDocument)
             .filter(AIDocument.document_id == document_id)
             .first()
-        )  # Resolves AI document
+        )
 
         if not ai_doc:
             return {
                 "status": "processing",
                 "message": "Document ingestion not completed yet",
-            }  # Guards early chat calls
+            }
 
-        chat_history = load_recent_chat_history(db, session_id)  # Loads recent context
+        # ---------------------------------
+        # 2️⃣ Store user message
+        # ---------------------------------
+        db.add(
+            SessionMessage(
+                session_id=session_id,
+                document_id=ai_doc.id,
+                role="user",
+                content=query,
+            )
+        )
+        db.commit()
 
-        chunks = (
-            db.query(DocumentChunk)
-            .filter(DocumentChunk.ai_document_id == ai_doc.id)
-            .order_by(DocumentChunk.chunk_index)
-            .limit(8)
-            .all()
-        )  # Retrieves top chunks for context
+        # ---------------------------------
+        # 3️⃣ Load recent chat memory
+        # ---------------------------------
+        chat_history = load_recent_chat_history(db, session_id)
+
+        # ---------------------------------
+        # 4️⃣ Create query embedding (🔥 ONE CALL 🔥)
+        # ---------------------------------
+        query_embedding = createEmbedding(query)
+
+        # ---------------------------------
+        # 5️⃣ Semantic retrieval
+        # ---------------------------------
+        top_chunks = semantic_search_chunks(
+            db,
+            ai_document_id=ai_doc.id,
+            query_embedding=query_embedding,
+            top_k=TOP_K,
+        )
 
         context_parts = []
         citations = []
 
-        for c in chunks:
+        for c in top_chunks:
             context_parts.append(f"[PAGE {c.page_number}] {c.chunk_text}")
             citations.append({"page_number": c.page_number})
 
+        # ---------------------------------
+        # 6️⃣ Fallback to summary if needed
+        # ---------------------------------
         if not context_parts:
             summary = (
                 db.query(DocumentSummary)
                 .filter(DocumentSummary.ai_document_id == ai_doc.id)
                 .first()
             )
-            if summary:
+
+            if summary and summary.summary_text:
                 context_parts.append(summary.summary_text)
                 citations = summary.citations or []
             else:
-                context_parts.append("No document context available.")  # Handles general questions
+                context_parts.append(
+                    "The provided document does not contain relevant information."
+                )
 
-        full_context_parts = []
+        # ---------------------------------
+        # 7️⃣ Build LLM context
+        # ---------------------------------
+        final_context_parts = []
 
         if chat_history:
-            full_context_parts.append(f"CHAT HISTORY:\n{chat_history}")
+            final_context_parts.append(
+                f"CHAT HISTORY:\n{chat_history}"
+            )
 
-        full_context_parts.append("DOCUMENT:\n" + "\n\n".join(context_parts))
+        final_context_parts.append(
+            "DOCUMENT CONTEXT:\n" + "\n\n".join(context_parts)
+        )
 
-        full_context = "\n\n".join(full_context_parts)  # Builds final LLM context
+        final_context = "\n\n".join(final_context_parts)
 
+        # ---------------------------------
+        # 8️⃣ 🔥 SINGLE LLM CALL 🔥
+        # ---------------------------------
         llm_result = askLlm(
-            context=full_context,
+            context=final_context,
             question=query,
         )
 
         answer = llm_result["data"]["answer"]
 
-        db.add_all([
-            SessionMessage(
-                session_id=session_id,
-                document_id=ai_doc.id,
-                role="user",
-                content=query,
-            ),
+        # ---------------------------------
+        # 9️⃣ Store assistant reply
+        # ---------------------------------
+        db.add(
             SessionMessage(
                 session_id=session_id,
                 document_id=ai_doc.id,
                 role="assistant",
                 content=answer,
-            ),
-        ])  # Persists conversation
+            )
+        )
         db.commit()
 
         return {

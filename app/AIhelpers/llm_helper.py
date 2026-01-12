@@ -87,7 +87,10 @@ def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
         ],
         "options": {
             "temperature": 0.6,                            # Faster, more deterministic
-            "num_predict": 300,                            # Hard response cap
+            "num_predict": 1000,                            # Hard response cap
+            "num_ctx": 4096,
+            "top_k": 40,
+            "top_p": 0.9        
         },
         "stream": False,
     }

@@ -380,6 +380,10 @@ class DocumentVersion(Base):
 
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    visibility = Column(String(20), default="PRIVATE")
+    public_at = Column(DateTime)
+
 
 
 class DocumentReview(Base):
@@ -409,7 +413,22 @@ class DocumentApprovalStep(Base):
     approver_type = Column(String, nullable=False)
 
     status = Column(String, default="PENDING")
-
+    version_id = Column(BigInteger, ForeignKey("document_versions.id"))
     remarks = Column(String)
     action_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+
+class DocumentWorkflowRun(Base):
+    __tablename__ = "document_workflow_runs"
+
+    id = Column(BigInteger, primary_key=True)
+    document_id = Column(BigInteger, ForeignKey("documents.id"), nullable=False)
+    version_id = Column(BigInteger, ForeignKey("document_versions.id"), nullable=False)
+    workflow_status = Column(String(20), nullable=False)
+    rejected_by = Column(BigInteger, ForeignKey("users.id"), nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
+    public_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

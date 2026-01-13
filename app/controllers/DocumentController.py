@@ -10,6 +10,9 @@ from app.services.document_service import (
     createDocumentDraft,
     saveDocument,
     get_document_full_details,
+    approve_document_step,
+    reject_document_step,
+    reupload_document_version,get_approver_inbox
 )
 
 router = APIRouter(prefix="/nodo/newdocuments")
@@ -111,3 +114,118 @@ def get_document_details(
             current_user=current_user,
         ),
     }
+
+
+@router.post("/approve/{document_id}")
+def approve_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    result = approve_document_step(
+        db=db,
+        document_id=document_id,
+        user_id=current_user["user_id"],
+        current_user=current_user,
+    )
+    return {
+        "statusCode": 200,
+        "message": result["message"],
+    }
+
+
+@router.post("/{document_id}/reject")
+def reject_document(
+    document_id: int,
+    payload: dict,  # Optional remark
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    remarks = payload.get("remarks") if payload else None
+
+    result = reject_document_step(
+        db=db,
+        document_id=document_id,
+        user_id=current_user["user_id"],
+        remarks=remarks,
+    )
+
+    return {
+        "statusCode": 200,
+        "message": result["message"],
+    }
+
+
+@router.post("/{document_id}/reupload")
+async def reupload_document(
+    document_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    # only uploader can reupload
+    from app.models import Document
+
+    document = (
+        db.query(Document)
+        .filter(
+            Document.id == document_id,
+            Document.uploaded_by == current_user["user_id"],
+            Document.is_delete == False,
+        )
+        .first()
+    )
+
+    if not document:
+        raise HTTPException(403, "Only uploader can reupload document")
+
+    # save temp
+    suffix = os.path.splitext(file.filename)[1] or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        temp_path = tmp.name
+
+    if os.path.getsize(temp_path) == 0:
+        os.remove(temp_path)
+        raise HTTPException(400, "Uploaded file is empty")
+
+    # permanent path
+    company_id = current_user["company_id"]
+    doc_dir = f"storage/companies/{company_id}/documents/{document_id}"
+    os.makedirs(doc_dir, exist_ok=True)
+
+    new_file_path = os.path.join(
+        doc_dir, f"v{document.current_version + 1}_{file.filename}"
+    )
+    shutil.move(temp_path, new_file_path)
+
+    result = reupload_document_version(
+        db=db,
+        document_id=document_id,
+        file_path=new_file_path,
+        file_name=file.filename,
+        created_by=current_user["user_id"],
+    )
+
+    return {
+        "statusCode": 200,
+        "message": result["message"],
+    }
+
+
+
+@router.post("/approver/inbox")
+def approver_inbox(
+    search: str | None = None,
+    page: int = 1,
+    size: int = 10,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return get_approver_inbox(
+        db=db,
+        current_user=current_user,
+        search=search,
+        page=page,
+        size=size,
+    )

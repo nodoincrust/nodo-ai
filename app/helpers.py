@@ -48,7 +48,7 @@ def send_otp_email(to_email: str, otp: str):
 
     with smtplib.SMTP("smtpout.secureserver.net", 587) as server:
         server.starttls()
-        # server.login("avinash@incrustsoftware.com","Incrust@123")
+        server.login("avinash@incrustsoftware.com","Incrust@123")
         server.send_message(msg)
 
 
@@ -65,6 +65,7 @@ def get_current_user(
 
     user_id = payload.get("user_id")
     company_id = payload.get("company_id")
+    name=payload.get("name")
     role = payload.get("role")
     department_id = payload.get("department_id")
 
@@ -90,6 +91,7 @@ def get_current_user(
         "user_id": user_id,
         "company_id": company_id,
         "role": role,
+        "name":name,
         "department_id": department.id if department else None,
         "is_department_head": is_department_head,
     }
@@ -211,3 +213,21 @@ def run_summary_job(job_id: str, documentId: int):
         jobs[job_id] = {"status": "done", "result": result}
     except Exception as e:
         jobs[job_id] = {"status": "error", "error": str(e)}
+
+
+
+
+
+def normalize_role(step):
+    role = step.approver_type
+
+    # company admin
+    if role == "COMPANY_ADMIN" or str(role) == "COMPANY_ADMIN":
+        return "Company Admin"
+
+    # dept head
+    if role == "DEPARTMENT_HEAD" or str(role) == "DEPARTMENT_HEAD":
+        return "Department Head"
+
+    # uploader
+    return "Uploader"

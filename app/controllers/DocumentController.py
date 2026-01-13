@@ -134,15 +134,15 @@ def approve_document(
     }
 
 
-@router.post("/{document_id}/reject")
+@router.post("/reject/{document_id}")
 def reject_document(
     document_id: int,
-    payload: dict,  # Optional remark
+    payload:dict,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    remarks = payload.get("remarks") if payload else None
-
+    remarks = payload.get("reason") if payload else None
+    print("remarks-----------",remarks)
     result = reject_document_step(
         db=db,
         document_id=document_id,

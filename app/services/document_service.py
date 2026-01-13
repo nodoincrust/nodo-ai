@@ -78,7 +78,7 @@ def compute_display_status(document, steps):
 
     # Approved final
     if status == "APPROVED":
-        return "Approved & Public"
+        return "Approved"
 
     # Fallback
     return status
@@ -347,9 +347,29 @@ def get_document_full_details(
         .order_by(DocumentApprovalStep.step_order)
         .all()
     )
+    
+    viewer_id = current_user["user_id"]
+    viewer_step = next((s for s in steps if s.assigned_to == viewer_id), None)
+
+    # if viewer_step:
+    #  is_actionable = (viewer_step.status == "PENDING")
+    # else:
+    #  is_actionable = False
+    
+    if viewer_step:
+     is_actionable = (viewer_step.status != "PENDING")
+    else:
+     is_actionable = True
+
+
+
 
     pending_step = next((s for s in steps if s.status == "PENDING"), None)
     pending_on = pending_step.approver_type.title() if pending_step else None
+    
+    rejected_step = next((s for s in steps if s.status == "REJECTED"), None)
+    remarks = rejected_step.remarks if rejected_step else None
+
 
     display_status = compute_display_status(document, steps)
 
@@ -371,13 +391,15 @@ def get_document_full_details(
             "id": document.id,
             "status": document.status,
             "display_status": display_status,
-            "is_approved":(document.status=="APPROVED"),
+            "is_approved": (document.status == "APPROVED"),
             "is_active": document.is_active,
             "created_at": document.created_at,
             "current_version": document.current_version,
             "uploaded_by": document.uploaded_by,
             "department_id": document.department_id,
             "company_id": document.company_id,
+            "is_actionable":is_actionable,
+            "remark":remarks
         },
         "file": {
             "file_name": version.file_name if version else None,
@@ -545,7 +567,7 @@ def reject_document_step(
     current_step.status = "REJECTED"
     current_step.action_at = datetime.utcnow()
     current_step.remarks = remarks or None
-
+    print("remarks service-----",remarks)
     workflow = (
         db.query(DocumentWorkflowRun)
         .filter(
@@ -668,9 +690,6 @@ def get_approver_inbox(
     user_id = current_user["user_id"]
     offset = (page - 1) * size
 
-    print("\n===== INBOX DEBUG START =====")
-    print("CURRENT USER:", user_id)
-
     query = (
         db.query(DocumentApprovalStep, Document, DocumentVersion, User)
         .join(Document, Document.id == DocumentApprovalStep.document_id)
@@ -683,44 +702,23 @@ def get_approver_inbox(
         .join(User, User.id == Document.uploaded_by)
         .filter(
             DocumentApprovalStep.assigned_to == user_id,
-            DocumentApprovalStep.status.in_(["PENDING", "APPROVED"]),
-            Document.status.in_(["SUBMITTED", "APPROVED"]),
+            DocumentApprovalStep.status.in_(["PENDING", "APPROVED", "REJECTED"]),
+            Document.status.in_(["SUBMITTED", "APPROVED", "REJECTED"]),
             Document.is_delete.is_(False),
         )
     )
 
     if search:
-        print("SEARCH:", search)
+
         search_pattern = f"%{search.lower()}%"
         query = query.filter(func.lower(DocumentVersion.file_name).like(search_pattern))
 
     total = query.count()
-    print("TOTAL ROWS:", total)
 
     rows = query.order_by(Document.created_at.desc()).offset(offset).limit(size).all()
 
-    print("ROWS FETCHED:", len(rows))
-
     data = []
     for i, (my_step, doc, version, uploader) in enumerate(rows, start=1):
-
-        print(f"\n--- ROW {i} ---")
-        print(
-            "DOC:",
-            doc.id,
-            "| current_version:",
-            doc.current_version,
-            "| doc.status:",
-            doc.status,
-        )
-        print("UPLOADER:", uploader.id, uploader.name)
-        print(
-            "MY_STEP:",
-            my_step.step_order,
-            my_step.status,
-            "| version_id:",
-            my_step.version_id,
-        )
 
         # fetch real version again in case join failed
         latest_version = (
@@ -728,13 +726,6 @@ def get_approver_inbox(
             .filter(DocumentVersion.document_id == doc.id)
             .order_by(DocumentVersion.version_number.desc())
             .first()
-        )
-
-        print(
-            "LATEST_VERSION:",
-            latest_version.id if latest_version else None,
-            "| num:",
-            latest_version.version_number if latest_version else None,
         )
 
         # fetch steps
@@ -747,24 +738,8 @@ def get_approver_inbox(
             .order_by(DocumentApprovalStep.step_order)
             .all()
         )
-
-        print("STEPS COUNT:", len(steps))
-        for s in steps:
-            print(
-                f"  STEP -> order:{s.step_order} user:{s.assigned_to} role:{s.approver_type} status:{s.status}"
-            )
-
-        # compute workflow
-        workflow = compute_workflow_view(steps, user_id)
-        print("WORKFLOW_VIEW:", workflow)
-
-        actionable = any(w["actionable"] for w in workflow)
-        print("ACTIONABLE:", actionable)
-
-        viewer_status = next(
-            (w["display"] for w in workflow if w["assigned_to"] == user_id), None
-        )
-        print("VIEWER_STATUS:", viewer_status)
+        viewer_status = my_step.status 
+        is_actionable = (my_step.status == "PENDING")
 
         data.append(
             {
@@ -774,15 +749,12 @@ def get_approver_inbox(
                     latest_version.version_number if latest_version else None
                 ),
                 "status": viewer_status,
-                # "workflow": workflow,
-                "actionable": actionable,
-                "is_approved":(doc.status =="APPROVED"),
+                "is_actionable": is_actionable,
+                "is_approved": True if viewer_status == "APPROVED" else False,
                 "uploaded_by": {"user_id": uploader.id, "name": uploader.name},
                 "submitted_at": doc.created_at,
             }
         )
-
-    print("===== INBOX DEBUG END =====\n")
 
     return {
         "statusCode": 200,

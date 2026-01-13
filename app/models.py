@@ -164,19 +164,6 @@ class Document(Base):
     uploaded_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     current_file_path = Column(Text, nullable=True)
 
-    status = Column(
-        Enum(
-            "DRAFT",
-            "SUBMITTED",
-            "UNDER_REVIEW",
-            "APPROVED",
-            "REJECTED",
-            name="document_status_enum",
-        ),
-        default="DRAFT",
-        nullable=False,
-    )
-
     current_version = Column(Integer, default=1)
     current_step_order = Column(Integer, nullable=True)
     current_assignee_id = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -380,10 +367,9 @@ class DocumentVersion(Base):
 
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     visibility = Column(String(20), default="PRIVATE")
     public_at = Column(DateTime)
-
 
 
 class DocumentReview(Base):
@@ -417,7 +403,6 @@ class DocumentApprovalStep(Base):
     remarks = Column(String)
     action_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
-
 
 
 class DocumentWorkflowRun(Base):

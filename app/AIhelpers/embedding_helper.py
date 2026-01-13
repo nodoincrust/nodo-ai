@@ -7,9 +7,6 @@ from typing import List, Dict
 
 logger = logging.getLogger("ai.embedding")
 
-# =========================
-# CONFIG
-# =========================
 REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 EMBED_URL = "http://localhost:11434/api/embeddings"
@@ -17,13 +14,9 @@ EMBED_MODEL = "nomic-embed-text"
 
 EMBED_DIM = 768
 CACHE_TTL = 86400          # 24 hours
-EMBED_TIMEOUT = 60
-MAX_BATCH_SIZE = 16        # ✅ HARD LIMIT (safe for Ollama)
+EMBED_TIMEOUT = 120
+MAX_BATCH_SIZE = 48        # Increased for faster batching on powerful system
 
-
-# =========================
-# HELPERS
-# =========================
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -31,17 +24,8 @@ def _hash(text: str) -> str:
 def _cache_key(text: str) -> str:
     return f"emb:{_hash(text)}"
 
-
-# =========================
-# MAIN API (BATCHED)
-# =========================
+#Batched Embeddings 
 def createEmbeddings(texts: List[str]) -> List[List[float]]:
-    """
-    ✅ TRUE BATCHED EMBEDDING
-    - Redis cached
-    - Single HTTP call per batch
-    - Order preserved
-    """
 
     if not texts:
         return []
@@ -49,7 +33,7 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
     results: List[List[float] | None] = [None] * len(texts)
     missing: List[Dict] = []
 
-    # 1️⃣ Read cache in pipeline
+    #Read cache in pipeline
     pipe = REDIS.pipeline()
     for t in texts:
         pipe.get(_cache_key(t))
@@ -64,13 +48,13 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
     if not missing:
         return results  # type: ignore
 
-    # 2️⃣ Batch call to Ollama
+    #Batch call to Ollama
     for i in range(0, len(missing), MAX_BATCH_SIZE):
         batch = missing[i : i + MAX_BATCH_SIZE]
 
         payload = {
             "model": EMBED_MODEL,
-            "prompt": [item["text"] for item in batch],
+            "input": [item["text"] for item in batch],
         }
 
         try:
@@ -83,7 +67,7 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
             vectors = response.json()["embeddings"]
 
         except Exception as exc:
-            logger.exception("Embedding batch failed")
+            logger.exception("Embedding batch failed: %s", str(exc))
             vectors = [[0.0] * EMBED_DIM for _ in batch]
 
         for item, vector in zip(batch, vectors):
@@ -97,7 +81,7 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
                 json.dumps(vector),
             )
 
-    return results  # type: ignore
+    return results
 
 
 def createEmbedding(text: str) -> List[float]:

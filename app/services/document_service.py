@@ -1,9 +1,9 @@
 import logging
 import shutil
 import os
-# import uuid
 from typing import Dict
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from fastapi import HTTPException
 
 from app.db import SessionLocal
@@ -81,15 +81,25 @@ def processDocument(
             db.add(aiDocument)
             db.commit()
 
-        lastChunkIndex = (
-            db.query(DocumentChunk.chunk_index)
+        # Check if already have chunks
+        existing_chunk_count = (
+            db.query(func.count(DocumentChunk.id))
             .filter(DocumentChunk.ai_document_id == aiDocument.id)
-            .order_by(DocumentChunk.chunk_index.desc())
-            .limit(1)
             .scalar()
         )
 
-        chunkIndex = (lastChunkIndex + 1) if lastChunkIndex is not None else 0
+        if existing_chunk_count > 0:
+            return {
+                "status": "already_processed",
+                "document_id": document_id,
+                "session_id": str(aiDocument.session_id),
+                "chunks": existing_chunk_count,
+                "ocr_used": False,  # we don't re-check OCR
+                "message": "Chunks already exist — skipping reprocessing"
+            }
+
+        # If chunks not exicts then proceed to chunking
+        lastChunkIndex = 0
 
         for pageNumber, rawText, usedOcr in iterateFilePages(storedFilePath):
             if not rawText or not rawText.strip():
@@ -102,10 +112,10 @@ def processDocument(
                 ai_document_id=aiDocument.id,
                 session_id=aiDocument.session_id,
                 pages=[(pageNumber, rawText)],
-                start_index=chunkIndex,   
+                start_index=lastChunkIndex,
             )
 
-            chunkIndex += created
+            lastChunkIndex += created
             chunksCreated += created
 
         db.commit()

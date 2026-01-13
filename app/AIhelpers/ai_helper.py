@@ -10,21 +10,13 @@ from app.AIhelpers.llm_helper import askLlm
 from app.services.background_tasks import submitMemoryUpdate
 
 
-# =========================
-# AI DOCUMENT RESOLUTION
-# =========================
-
 def getAiDocument(db: Session, document_id: int):
     return (
         db.query(AIDocument)
-        .filter(AIDocument.document_id == document_id)
+        .filter(AIDocument.document_id == document_id)      # Fetches AI document for given document_id
         .first()
-    )  # Fetches AI document for given document_id
+    )  
 
-
-# =========================
-# CHAT MESSAGE PERSISTENCE
-# =========================
 
 def saveMessage(
     db: Session,
@@ -41,12 +33,8 @@ def saveMessage(
             role=role,
             content=content,
         )
-    )  # Saves a single chat message
+    )
 
-
-# =========================
-# SESSION MEMORY FETCH
-# =========================
 
 def getSessionMemorySummary(db: Session, session_id: str) -> str:
     record = (
@@ -56,10 +44,6 @@ def getSessionMemorySummary(db: Session, session_id: str) -> str:
     )
     return record.summary if record else ""  # Returns cached memory summary
 
-
-# =========================
-# MEMORY-AWARE LLM CALL
-# =========================
 
 def askLlmWithMemory(
     *,
@@ -74,12 +58,12 @@ def askLlmWithMemory(
     finalContext = (
         f"MEMORY:\n{memory}\n\n{context}"
         if memory else context
-    )  # Injects memory only when present
+    )
 
     result = askLlm(
         context=finalContext,
         question=question,
-    )  # Executes optimized LLM call
+    )
 
     submitMemoryUpdate(session_id)  # Triggers background memory summarization
 

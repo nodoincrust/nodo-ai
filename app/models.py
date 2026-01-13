@@ -12,7 +12,6 @@ from sqlalchemy import (
     Numeric,
     CheckConstraint,
     UniqueConstraint,
-    JSON,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -260,7 +259,7 @@ class DocumentChunk(Base):
         default=lambda: datetime.now(timezone.utc),
     )
 
-    # 🔑 REQUIRED
+    #AI docuemnt Relations
     ai_document = relationship(
         "AIDocument",
         back_populates="chunks",
@@ -290,7 +289,6 @@ class DocumentSummary(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
-    # 🔑 THIS FIXES THE ERROR
     ai_document = relationship(
         "AIDocument",
         back_populates="summary",
@@ -313,7 +311,7 @@ class SessionMessage(Base):
         index=True,
     )
 
-    # ✅ ALIGNED: references documents.id
+    #references documents.id
     document_id = Column(
         BigInteger,
         ForeignKey("documents.id", ondelete="CASCADE"),
@@ -340,10 +338,7 @@ class SessionMessage(Base):
         CheckConstraint("role IN ('user', 'assistant', 'system')"),
     )
 
-# =====================================================
-# SESSION MEMORY SUMMARY (LONG-TERM MEMORY)
-# =====================================================
-
+#Session Memory Summery (Long term Memory)
 class SessionMemorySummary(Base):
     __tablename__ = "session_memory_summaries"
 

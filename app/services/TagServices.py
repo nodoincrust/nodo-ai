@@ -1,31 +1,31 @@
+# TagServices.py
 import logging
 import json
 import re
 from sqlalchemy.orm import Session
 from typing import List
 
+from app.AIhelpers.embedding_helper import createEmbeddings
 from app.models import DocumentSummary, DocumentChunk, AIDocument
-from app.AIhelpers.llm_helper import askLlm
+from app.AIhelpers.llm_helper import askLlm, RAGHelper
 
 logger = logging.getLogger("ai.tagService")
 
 
-def generateTagsFromLLM(document_id: int, db: Session) -> List[str]:
-    """
-    Generate tags for a document using LLM based on document chunks.
-    """
+def generateTagsFromLLM(document_id: int, db: Session, use_rag: bool = True) -> List[str]:
+    # Generate tags for a document using LLM based on document chunks.
+    
     # Get AI document
     ai_doc = db.query(AIDocument).filter(AIDocument.document_id == document_id).first()
     if not ai_doc:
         logger.error("AI document not found for document_id %s", document_id)
         return []
 
-    # Get chunks
+    # Get chunks (all for large docs, but limit for context)
     chunks = (
         db.query(DocumentChunk)
         .filter(DocumentChunk.ai_document_id == ai_doc.id)
         .order_by(DocumentChunk.chunk_index)
-        .limit(12)  # Use top chunks for tag generation
         .all()
     )
 
@@ -33,9 +33,13 @@ def generateTagsFromLLM(document_id: int, db: Session) -> List[str]:
         logger.info("No chunks found for document_id %s", document_id)
         return []
 
+    # For large docs, select top relevant chunks using pgvector
+    if len(chunks) > 50:
+        chunks = select_top_chunks(db, chunks, "relevant tags and themes")
+
     # Prepare context
-    context_parts = [f"[PAGE {c.page_number}] {c.chunk_text}" for c in chunks]
-    document_context = "\n\n".join(context_parts)[:7000]  # Limit context
+    context_parts = [f"[PAGE {c.page_number}] {c.chunk_text}" for c in chunks[:50]]  # Limit to 50 for speed
+    document_context = "\n\n".join(context_parts)[:30000]  # Increased limit
 
     # Tag generation prompt
     tag_prompt = """
@@ -55,25 +59,44 @@ Return ONLY a JSON array of strings, like: ["tag1", "tag2", "tag3"]
 """
 
     try:
-        llm_result = askLlm(
-            context=f"{tag_prompt}\n\nDOCUMENT EXCERPTS:\n{document_context}",
-            question="Generate relevant tags for this document.",
-        )
+        if use_rag:
+            rag = RAGHelper(db)
+            summary = ' '.join([c.chunk_text for c in chunks])[:2000]  # Temp summary for query
+            retrieved = rag.query(summary, top_k=3)  # Reduced for speed
+            if retrieved:
+                examples = '\n'.join([f"Similar: {r['summary']} -> Tags: {', '.join(r['tags'])}" for r in retrieved])
+                tag_prompt += f"\nExamples from similar documents:\n{examples}"
 
-        raw_response = llm_result["data"]["answer"].strip()
+        # Retry loop for LLM
+        tags = []
+        for attempt in range(3):
+            try:
+                llm_result = askLlm(
+                    context=f"{tag_prompt}\n\nDOCUMENT EXCERPTS:\n{document_context}",
+                    question="Generate relevant tags for this document.",
+                )
+                raw_response = llm_result["data"]["answer"].strip()
 
-        # Parse JSON array
-        if raw_response.startswith("[") and raw_response.endswith("]"):
-            tags = json.loads(raw_response)
-        else:
-            # Try to extract from response
-            start = raw_response.find("[")
-            end = raw_response.rfind("]")
-            if start != -1 and end != -1:
-                tags = json.loads(raw_response[start:end+1])
-            else:
-                logger.error("Failed to parse tags from LLM response: %s", raw_response)
-                return []
+                # Parse JSON array
+                if raw_response.startswith("[") and raw_response.endswith("]"):
+                    tags = json.loads(raw_response)
+                else:
+                    # Try to extract from response
+                    start = raw_response.find("[")
+                    end = raw_response.rfind("]")
+                    if start != -1 and end != -1:
+                        tags = json.loads(raw_response[start:end+1])
+                    else:
+                        raise ValueError("Failed to parse tags")
+
+                if tags:
+                    break
+            except Exception as e:
+                if attempt == 2:
+                    logger.error("LLM tags failed after retries: %s", str(e))
+                    # Fallback to keywords
+                    return _fallback_keywords(document_context)
+                continue
 
         # Validate and clean tags
         cleaned_tags = []
@@ -87,6 +110,17 @@ Return ONLY a JSON array of strings, like: ["tag1", "tag2", "tag3"]
 
     except Exception as e:
         logger.exception("Error generating tags from LLM: %s", str(e))
+        return _fallback_keywords(document_context)
+
+
+def _fallback_keywords(text: str) -> List[str]:
+    stop_words = {"the", "and", "is", "in", "to", "of", "a", "for", "on", "with", "as", "by", "that", "this", "are", "was", "it", "be", "or", "from", "at", "an", "which"}
+    try:
+        words = re.findall(r'\b\w+\b', text.lower())
+        keywords = [w for w in words if w.isalpha() and w not in stop_words]
+        return list(set(keywords))[:10]
+    except Exception as e:
+        logger.error(f"Keyword fallback failed: {e}")
         return []
 
 
@@ -96,9 +130,6 @@ def storeDocumentTags(
     document_id: int,
     tags: List[str],
 ) -> bool:
-    """
-    Store tags for a document in the database.
-    """
     try:
         # Get AI document
         ai_doc = db.query(AIDocument).filter(AIDocument.document_id == document_id).first()
@@ -135,10 +166,6 @@ def generateAndStoreTags(
     *,
     document_id: int,
 ) -> List[str]:
-    """
-    Generate tags from LLM and store them in the database.
-    Returns the generated tags.
-    """
     tags = generateTagsFromLLM(document_id, db)
     if tags:
         success = storeDocumentTags(db=db, document_id=document_id, tags=tags)
@@ -168,3 +195,20 @@ def getDocumentTags(
         return []
 
     return record.tags
+
+
+def select_top_chunks(db: Session, chunks: List[DocumentChunk], query_text: str, top_k: int = 50) -> List[DocumentChunk]:
+
+    try:
+        query_emb = createEmbeddings([query_text])[0]
+        # Use pgvector cosine distance operator
+        results = (
+            db.query(DocumentChunk)
+            .order_by(DocumentChunk.embedding.op('<->')(query_emb))         # Use pgvector cosine distance operator
+            .limit(top_k)
+            .all()
+        )
+        return results
+    except Exception as e:
+        logger.warning(f"Chunk selection failed: {e}; using all chunks")
+        return chunks[:top_k]

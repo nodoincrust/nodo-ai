@@ -1,5 +1,6 @@
-from typing import List, Tuple
+from typing import List
 from sqlalchemy.orm import Session
+# from sqlalchemy import func
 
 from app.db import SessionLocal
 from app.models import (
@@ -11,17 +12,9 @@ from app.models import (
 from app.AIhelpers.embedding_helper import createEmbedding
 from app.AIhelpers.llm_helper import askLlm
 
-
-# =========================
-# CONFIG
-# =========================
-TOP_K = 5               # number of chunks to retrieve
+TOP_K = 15               # number of chunks to retrieve
 MAX_CHAT_HISTORY = 6    # recent messages only
 
-
-# =========================
-# HELPERS
-# =========================
 def load_recent_chat_history(
     db: Session,
     session_id: str,
@@ -50,58 +43,25 @@ def semantic_search_chunks(
     query_embedding: List[float],
     top_k: int = TOP_K,
 ) -> List[DocumentChunk]:
-    """
-    Pure embedding-based semantic search.
-    NO LLM calls here.
-    SAFE for numpy / pgvector / list embeddings.
-    """
-
-    chunks = (
+    return (
         db.query(DocumentChunk)
         .filter(DocumentChunk.ai_document_id == ai_document_id)
+        .order_by(
+            DocumentChunk.embedding.cosine_distance(query_embedding)
+        )
+        .limit(top_k)
         .all()
     )
 
-    scored: List[Tuple[float, DocumentChunk]] = []
-
-    for chunk in chunks:
-        # ✅ SAFE embedding check (CRITICAL FIX)
-        if chunk.embedding is None or len(chunk.embedding) == 0:
-            continue
-
-        # Dot-product similarity (nomic vectors are normalized)
-        score = sum(
-            qe * ce
-            for qe, ce in zip(query_embedding, chunk.embedding)
-        )
-
-        scored.append((score, chunk))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    return [chunk for _, chunk in scored[:top_k]]
-
-
-# =========================
-# MAIN CHAT API
-# =========================
 def chatWithDocument(
     *,
     document_id: int,
     session_id: str,
     query: str,
 ) -> dict:
-    """
-    🔥 EMBEDDING-BASED DOCUMENT CHAT
-    - ONE embedding call
-    - ONE LLM call
-    """
 
     with SessionLocal() as db:
 
-        # ---------------------------------
-        # 1️⃣ Resolve AI document
-        # ---------------------------------
         ai_doc = (
             db.query(AIDocument)
             .filter(AIDocument.document_id == document_id)
@@ -114,9 +74,6 @@ def chatWithDocument(
                 "message": "Document ingestion not completed yet",
             }
 
-        # ---------------------------------
-        # 2️⃣ Store user message
-        # ---------------------------------
         db.add(
             SessionMessage(
                 session_id=session_id,
@@ -127,19 +84,11 @@ def chatWithDocument(
         )
         db.commit()
 
-        # ---------------------------------
-        # 3️⃣ Load recent chat memory
-        # ---------------------------------
         chat_history = load_recent_chat_history(db, session_id)
 
-        # ---------------------------------
-        # 4️⃣ Create query embedding (🔥 ONE CALL 🔥)
-        # ---------------------------------
-        query_embedding = createEmbedding(query)
+        query_embedding = createEmbedding(query.strip().lower())
 
-        # ---------------------------------
-        # 5️⃣ Semantic retrieval
-        # ---------------------------------
+        #Sementic search accross the chunks
         top_chunks = semantic_search_chunks(
             db,
             ai_document_id=ai_doc.id,
@@ -154,9 +103,6 @@ def chatWithDocument(
             context_parts.append(f"[PAGE {c.page_number}] {c.chunk_text}")
             citations.append({"page_number": c.page_number})
 
-        # ---------------------------------
-        # 6️⃣ Fallback to summary if needed
-        # ---------------------------------
         if not context_parts:
             summary = (
                 db.query(DocumentSummary)
@@ -172,9 +118,6 @@ def chatWithDocument(
                     "The provided document does not contain relevant information."
                 )
 
-        # ---------------------------------
-        # 7️⃣ Build LLM context
-        # ---------------------------------
         final_context_parts = []
 
         if chat_history:
@@ -188,9 +131,6 @@ def chatWithDocument(
 
         final_context = "\n\n".join(final_context_parts)
 
-        # ---------------------------------
-        # 8️⃣ 🔥 SINGLE LLM CALL 🔥
-        # ---------------------------------
         llm_result = askLlm(
             context=final_context,
             question=query,
@@ -198,9 +138,6 @@ def chatWithDocument(
 
         answer = llm_result["data"]["answer"]
 
-        # ---------------------------------
-        # 9️⃣ Store assistant reply
-        # ---------------------------------
         db.add(
             SessionMessage(
                 session_id=session_id,

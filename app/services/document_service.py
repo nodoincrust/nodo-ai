@@ -24,8 +24,8 @@ from app.schemas import DocumentSaveSchema
 BASE_STORAGE_PATH = "storage"
 logger = logging.getLogger(__name__)
 
-MAX_UPLOAD_MB = 50
-CHUNK_BATCH_SIZE = 32
+# MAX_UPLOAD_MB = 50
+# CHUNK_BATCH_SIZE = 32
 
 
 def processDocument(

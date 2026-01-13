@@ -2,13 +2,40 @@ from sqlalchemy.orm import Session
 from app.models import SessionMessage, SessionMemorySummary
 from app.AIhelpers.llm_helper import askLlm
 
+def pruneOldMessages(
+    db: Session,
+    *,
+    sessionId: str,
+    keep_last: int = 50,
+) -> int:
+    """
+    Delete old chat messages after memory summary is updated.
+    Keeps only the latest `keep_last` messages.
+    """
+
+    subquery = (
+        db.query(SessionMessage.id)
+        .filter(SessionMessage.session_id == sessionId)
+        .order_by(SessionMessage.created_at.desc())
+        .limit(keep_last)
+        .subquery()
+    )
+
+    deleted = (
+        db.query(SessionMessage)
+        .filter(SessionMessage.session_id == sessionId)
+        .filter(SessionMessage.id.notin_(subquery))
+        .delete(synchronize_session=False)
+    )
+
+    return deleted
 
 def updateMemorySummary(
     db: Session,
     *,
     sessionId: str,
     messageCount: int | None = None,
-) -> None:
+) -> bool:
     messages = (
         db.query(SessionMessage)
         .filter_by(session_id=sessionId)
@@ -17,13 +44,14 @@ def updateMemorySummary(
     )
 
     if not messages:
-        return
+        return False
 
-    conversationText = "\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
+    conversationText = "\n".join(
+        f"{m.role.upper()}: {m.content}" for m in messages
+    )
 
     prompt = (
         "Summarize the conversation below.\n"
-        "Do NOT include document details unless explicitly discussed.\n"
         "Keep it concise and factual.\n\n"
         f"{conversationText}"
     )
@@ -31,7 +59,11 @@ def updateMemorySummary(
     llmResult = askLlm(context=prompt, question="Summarize conversation.")
     summaryText = llmResult["data"]["answer"]
 
-    existing = db.query(SessionMemorySummary).filter_by(session_id=sessionId).first()
+    existing = (
+        db.query(SessionMemorySummary)
+        .filter_by(session_id=sessionId)
+        .first()
+    )
 
     if existing:
         existing.summary = summaryText
@@ -45,3 +77,5 @@ def updateMemorySummary(
                 message_count=messageCount,
             )
         )
+
+    return True

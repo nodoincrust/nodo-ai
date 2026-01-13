@@ -64,7 +64,7 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
                 timeout=EMBED_TIMEOUT,
             )
             response.raise_for_status()
-            vectors = response.json()["embeddings"]
+            vectors = [response.json()["embeddings"]]
 
         except Exception as exc:
             logger.exception("Embedding batch failed: %s", str(exc))

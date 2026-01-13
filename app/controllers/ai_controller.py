@@ -16,7 +16,7 @@ from fastapi import (
 from app.db import SessionLocal
 from app.helpers import get_current_user, run_summary_job
 from app.services.document_service import processDocument, createDocumentDraft
-from app.services.chat_service import chatWithDocument
+from app.services.chat_service import chatWithDocument, fetchFullChatHistorySafe
 from app.services.ai_DBservice import getOrCreateSessionForDocument
 from jobs_store import jobs
 
@@ -143,3 +143,23 @@ def get_summary_status(job_id: str):
     if not job:
         return {"status": "not_found"}
     return {"job_id": job_id, **job}
+
+@router.get("/chat/history/{documentId}")
+def getChatHistory(documentId: int):
+
+    if not documentId or documentId <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid documentId"
+        )
+
+    result = fetchFullChatHistorySafe(documentId=documentId)
+
+    # If service itself failed
+    if result["status"] == "error":
+        raise HTTPException(
+            status_code=500,
+            detail=result["error"] or "Failed to fetch chat history"
+        )
+
+    return result

@@ -1,6 +1,9 @@
 from typing import List
 from sqlalchemy.orm import Session
 # from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
+from app.services.ai_DBservice import getOrCreateSessionForDocument
+import logging
 
 from app.db import SessionLocal
 from app.models import (
@@ -8,12 +11,16 @@ from app.models import (
     DocumentChunk,
     DocumentSummary,
     SessionMessage,
+    SessionMemorySummary,
 )
 from app.AIhelpers.embedding_helper import createEmbedding
 from app.AIhelpers.llm_helper import askLlm
+from app.services.background_tasks import submitMemoryUpdate
+
+logger = logging.getLogger("ai.chatHistoryService")
 
 TOP_K = 15               # number of chunks to retrieve
-MAX_CHAT_HISTORY = 6    # recent messages only
+MAX_CHAT_HISTORY = 15    # recent messages only
 
 def load_recent_chat_history(
     db: Session,
@@ -86,6 +93,12 @@ def chatWithDocument(
 
         chat_history = load_recent_chat_history(db, session_id)
 
+        memory = (
+            db.query(SessionMemorySummary)
+            .filter_by(session_id=session_id)
+            .first()
+        )
+
         query_embedding = createEmbedding(query.strip().lower())
 
         #Sementic search accross the chunks
@@ -120,9 +133,14 @@ def chatWithDocument(
 
         final_context_parts = []
 
+        if memory and memory.summary:
+            final_context_parts.append(
+                f"MEMORY SUMMARY (previous conversation):\n{memory.summary}"
+            )
+
         if chat_history:
             final_context_parts.append(
-                f"CHAT HISTORY:\n{chat_history}"
+                f"RECENT CHAT HISTORY:\n{chat_history}"
             )
 
         final_context_parts.append(
@@ -148,8 +166,89 @@ def chatWithDocument(
         )
         db.commit()
 
+        submitMemoryUpdate(session_id)
+
         return {
             "status": "success",
             "answer": answer,
             "citations": citations,
         }
+    
+
+def fetchFullChatHistorySafe(*, documentId: int) -> dict:
+
+    response = {
+        "status": "empty",
+        "documentId": documentId,
+        "sessionId": None,
+        "memorySummary": None,
+        "messages": [],
+        "error": None,
+    }
+
+    db = SessionLocal()
+
+    try:
+        try:
+            sessionId = getOrCreateSessionForDocument(documentId)
+            response["sessionId"] = str(sessionId)
+        except Exception as exc:
+            logger.exception("Failed to resolve session for document %s", documentId)
+            response["status"] = "error"
+            response["error"] = "Session resolution failed"
+            return response
+
+        try:
+            memory = (
+                db.query(SessionMemorySummary)
+                .filter_by(session_id=sessionId)
+                .first()
+            )
+            if memory and memory.summary:
+                response["memorySummary"] = memory.summary
+        except SQLAlchemyError:
+            logger.warning(
+                "Memory summary fetch failed for session %s", sessionId
+            )
+
+        try:
+            messages = (
+                db.query(SessionMessage)
+                .filter_by(session_id=sessionId)
+                .order_by(SessionMessage.created_at.asc())
+                .all()
+            )
+
+            response["messages"] = [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "created_at": (
+                        m.created_at.isoformat()
+                        if m.created_at else None
+                    ),
+                }
+                for m in messages
+            ]
+
+        except SQLAlchemyError:
+            logger.exception(
+                "Chat message fetch failed for session %s", sessionId
+            )
+            response["status"] = "error"
+            response["error"] = "Failed to fetch chat messages"
+            return response
+        
+        if response["messages"] or response["memorySummary"]:
+            response["status"] = "success"
+
+        return response
+
+    except Exception as exc:
+        logger.exception("Unexpected error in chat history fetch")
+        response["status"] = "error"
+        response["error"] = "Unexpected server error"
+        return response
+
+    finally:
+        db.close()

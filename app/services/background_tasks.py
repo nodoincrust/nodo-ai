@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.db import SessionLocal
 from app.models import SessionMessage, SessionMemorySummary
+from app.services.memory_service import pruneOldMessages, updateMemorySummary
 from app.services.memory_service import updateMemorySummary
 
 logger = logging.getLogger("ai.backgroundTasks")
@@ -46,28 +47,29 @@ def runMemoryUpdate(sessionId: str) -> None:
         )
 
         if messageCount == 0 or messageCount % MEMORY_UPDATE_INTERVAL != 0:
-            return                                      # Skips update unless threshold reached
+            return
 
-        existing = (
-            db.query(SessionMemorySummary)
-            .filter_by(session_id=sessionId)
-            .first()
-        )
-
-        if existing and existing.updated_at:
-            return                                      # Prevents duplicate updates
-
-        logger.info(
-            "Updating memory summary session=%s messages=%s",
-            sessionId,
-            messageCount,
-        )
-
-        updateMemorySummary(
+        #Update memory summary
+        updated = updateMemorySummary(
             db,
             sessionId=sessionId,
             messageCount=messageCount,
-        )                                                # Generates summarized memory
+        )
+
+        # Prune ONLY if summary succeeded
+        if updated:
+            deleted = pruneOldMessages(
+                db,
+                sessionId=sessionId,
+                keep_last=50,
+            )
+
+            logger.info(
+                "Session %s → memory updated, %s messages pruned",
+                sessionId,
+                deleted,
+            )
+
         db.commit()
 
     except Exception:

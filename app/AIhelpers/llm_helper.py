@@ -32,6 +32,7 @@ MEMORY & CONTEXT:
 • Use session memory only for relevant context
 • Do NOT contradict previous information
 • Synthesize multiple document chunks logically
+• If conversation memory or chat history is provided, you MUST rely on it. Do NOT say a topic was not discussed if it appears in memory or history.
 
 ERROR HANDLING:
 • Never guess or assume

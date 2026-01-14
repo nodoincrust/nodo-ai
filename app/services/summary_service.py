@@ -85,19 +85,25 @@ def safeJsonParse(raw: str) -> dict:
         "citations": citations,
     }
 
-
-def summarizeDocument(documentId: int) -> dict:
+def summarizeDocument(documentId: int, version: int | None = None) -> dict:
     db: Session = SessionLocal()
     try:
-
-        ai_doc = (
-            db.query(AIDocument).filter(AIDocument.document_id == documentId).first()
-        )
+        # Select ai document by version
+        if version:
+            ai_doc = db.query(AIDocument).filter(
+                AIDocument.document_id == documentId,
+                AIDocument.version_id == version
+            ).first()
+        else:
+            # auto-latest
+            ai_doc = db.query(AIDocument).filter(
+                AIDocument.document_id == documentId
+            ).order_by(AIDocument.version_id.desc()).first()
 
         if not ai_doc:
             return {
                 "status": "processing",
-                "message": "Document ingestion not completed yet",
+                "message": "Document ingestion not completed yet"
             }
 
         ai_document_id = ai_doc.id
@@ -113,9 +119,10 @@ def summarizeDocument(documentId: int) -> dict:
         if not chunks:
             return {
                 "status": "processing",
-                "message": "Chunks not ready yet",
+                "message": "Chunks not ready yet"
             }
 
+        # build context
         chunk_parts = []
         default_citations = []
 
@@ -125,13 +132,12 @@ def summarizeDocument(documentId: int) -> dict:
 
         document_context = "\n\n".join(chunk_parts)[:MAX_CONTEXT_CHARS]
 
-        existing = (
-            db.query(DocumentSummary)
-            .filter(DocumentSummary.ai_document_id == ai_document_id)
-            .first()
-        )
+        existing = db.query(DocumentSummary).filter(
+            DocumentSummary.ai_document_id == ai_document_id
+        ).first()
 
         previous_summary = existing.summary_text if existing else ""
+
         llm_context = (
             f"{BASE_SYSTEM_PROMPT}\n\n"
             f"PREVIOUS SUMMARY:\n{previous_summary}\n\n"
@@ -144,17 +150,14 @@ def summarizeDocument(documentId: int) -> dict:
         )
 
         parsed = safeJsonParse(llm_result["data"]["answer"])
-
         summary_text = parsed.get("summary", "").strip()
         tags = parsed.get("tags", [])
         citations = parsed.get("citations", default_citations)
 
         if not summary_text:
-            return {
-                "status": "error",
-                "message": "Summary generation failed",
-            }
+            return {"status": "error", "message": "Summary generation failed"}
 
+        # normalize tags
         tags = [
             str(t).strip().title()
             for t in tags
@@ -162,6 +165,7 @@ def summarizeDocument(documentId: int) -> dict:
         ]
         tags = list(dict.fromkeys(tags))[:6]
 
+        # write / update
         if existing:
             existing.summary_text = summary_text
             existing.tags = tags

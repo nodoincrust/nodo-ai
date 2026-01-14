@@ -207,12 +207,17 @@ def get_hierarchy_order(user: User, is_department_head: bool) -> int:
         return 2
     return 1
 
-def run_summary_job(job_id: str, documentId: int):
+def run_summary_job(job_id: str, documentId: int, version: int):
     try:
-        result = summarizeDocument(documentId)
-        jobs[job_id] = {"status": "done", "result": result}
+        result = summarizeDocument(documentId, version)
+        jobs[job_id] = {"status": "done", "result": result, "version": version}
     except Exception as e:
-        jobs[job_id] = {"status": "error", "error": str(e)}
+        jobs[job_id] = {
+            "status": "error",
+            "error": str(e),
+            "version": version
+        }
+
 
 
 

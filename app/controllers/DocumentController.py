@@ -1,10 +1,11 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks,Form,Body
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
 import os
+from app.models import Document
 from app.helpers import get_db, get_current_user
-from app.schemas import DocumentSaveSchema
+from app.schemas import DocumentSaveSchema,GetApprovalDocumentList
 from app.services.document_service import (
     processDocument,
     createDocumentDraft,
@@ -12,7 +13,10 @@ from app.services.document_service import (
     get_document_full_details,
     approve_document_step,
     reject_document_step,
-    reupload_document_version,get_approver_inbox
+    reupload_document_version,get_approver_inbox,
+)
+from app.services.bouquetService import(
+    createBouquet,getBouquetById,appendDocumentToBouquet,removeDocumentFromBouquet,deleteBouquet,getAllBoqList
 )
 
 router = APIRouter(prefix="/nodo/newdocuments")
@@ -27,9 +31,11 @@ def greet():
 async def uploadDocument(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    documentId: int | None = Form(None),   # <--- ADDED
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
+
     suffix = os.path.splitext(file.filename)[1] or ".pdf"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -41,6 +47,42 @@ async def uploadDocument(
 
     fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
 
+    # === REUPLOAD CASE ===
+    if documentId:
+        document = db.query(Document).filter(
+            Document.id == documentId,
+            Document.is_delete.is_(False)
+        ).first()
+
+        if document and document.status == "REJECTED":
+            newVersion = reupload_document_version(
+                db=db,
+                document_id=document.id,
+                file_path=tempPath,
+                file_name=file.filename,
+                created_by=currentUser["user_id"],
+            )
+
+            # AI Processing for v2
+            background_tasks.add_task(
+                processDocument,
+                filePath=tempPath,
+                documentId=document.id,
+                versionId=newVersion["version_id"],
+                filename=file.filename,
+                fileType=file.content_type,
+                fileSizeMb=fileSizeMb,
+            )
+
+            return {
+                "status": "success",
+                "documentId": document.id,
+                "version": newVersion["version"],
+                "version_id": newVersion["version_id"],
+                "filepath": newVersion["file_path"]
+            }
+
+    # === NORMAL NEW DOCUMENT FLOW ===
     result = createDocumentDraft(
         db=db,
         tempFilePath=tempPath,
@@ -51,26 +93,18 @@ async def uploadDocument(
 
     businessDocumentId = result["document_id"]
     permanentPath = result["file_path"]
-
-    # try:
-    #     aiResult = processDocument(
-    #         filePath=permanentPath,
-    #         documentId=businessDocumentId,
-    #         filename=file.filename,
-    #         fileType=file.content_type,
-    #         fileSizeMb=fileSizeMb,
-    #     )
-    # except Exception as exc:
-    #     raise HTTPException(status_code=500, detail="AI processing failed")
+    versionId = result["version_id"]
 
     background_tasks.add_task(
         processDocument,
         filePath=permanentPath,
         documentId=businessDocumentId,
+        versionId=versionId,
         filename=file.filename,
         fileType=file.content_type,
         fileSizeMb=fileSizeMb,
     )
+
     return {
         "status": "success",
         "documentId": businessDocumentId,
@@ -103,6 +137,7 @@ def saveDocumentApi(
 @router.get("/{document_id}/details")
 def get_document_details(
     document_id: int,
+    version: int | None = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -111,6 +146,7 @@ def get_document_details(
         "data": get_document_full_details(
             db=db,
             document_id=document_id,
+            version=version,
             current_user=current_user,
         ),
     }
@@ -156,7 +192,7 @@ def reject_document(
     }
 
 
-@router.post("/{document_id}/reupload")
+@router.post("/reupload/{document_id}")
 async def reupload_document(
     document_id: int,
     file: UploadFile = File(...),
@@ -216,16 +252,120 @@ async def reupload_document(
 
 @router.post("/approver/inbox")
 def approver_inbox(
-    search: str | None = None,
-    page: int = 1,
-    size: int = 10,
+    payload:GetApprovalDocumentList,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    print("asdfghjkl",payload.dict())
     return get_approver_inbox(
         db=db,
         current_user=current_user,
-        search=search,
-        page=page,
-        size=size,
+        search=payload.search,
+        status=payload.status,
+        page=payload.page,
+        pagelimit=payload.pagelimit
     )
+
+
+
+@router.post("/bouquets")
+def createBouquetEndpoint(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    currentUser: dict = Depends(get_current_user),
+):
+    name = payload.get("name")
+    description = payload.get("description")
+ 
+    if not name:
+        raise HTTPException(400, "name is required")
+ 
+    bouquet = createBouquet(
+        db=db,
+        name=name,
+        description=description,
+        createdBy=currentUser["user_id"],
+    )
+ 
+    return {
+        "id": bouquet.id,
+        "message": "Bouquet created successfully",
+    }
+ 
+@router.get("/getAllBoq")
+def getAllBoq( db: Session = Depends(get_db),currentUser: dict = Depends(get_current_user)):
+    
+    result= getAllBoqList(db=db,current_user=currentUser)
+    
+    if not result:
+        raise HTTPException("Boq not found")
+    else:
+        return result
+    
+    
+@router.get("/bouquets/{bouquetId}")
+def getBouquet(
+    bouquetId: int,
+    db: Session = Depends(get_db),
+):
+    result = getBouquetById(db, bouquetId)
+ 
+    if not result:
+        raise HTTPException(404, "Bouquet not found")
+ 
+    return result
+ 
+ 
+@router.delete("/bouquets/{bouquetId}")
+def deleteBouquetEndpoint(
+    bouquetId: int,
+    db: Session = Depends(get_db),
+    currentUser: dict = Depends(get_current_user),
+):
+    deleteBouquet(
+        db=db,
+        bouquetId=bouquetId,
+        currentUserId=currentUser["user_id"],
+    )
+    return {"message": "Bouquet deleted successfully"}
+ 
+ 
+@router.post("/bouquets/{bouquetId}/appendDocument")
+def appendDocument(
+    bouquetId: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    documentId = payload.get("documentId")
+ 
+    if not documentId:
+        raise HTTPException(400, "documentId is required")
+ 
+    appendDocumentToBouquet(
+        db=db,
+        bouquetId=bouquetId,
+        documentId=documentId,
+    )
+ 
+    return {"message": "Document appended to bouquet successfully"}
+ 
+ 
+@router.delete("/bouquets/{bouquetId}/removeDocument")
+def removeDocument(
+    bouquetId: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    documentId = payload.get("documentId")
+ 
+    if not documentId:
+        raise HTTPException(400, "documentId is required")
+ 
+    removeDocumentFromBouquet(
+        db=db,
+        bouquetId=bouquetId,
+        documentId=documentId,
+    )
+ 
+    return {"message": "Document removed from bouquet successfully"}
+ 

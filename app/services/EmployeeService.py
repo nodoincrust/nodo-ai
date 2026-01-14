@@ -1,11 +1,10 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from sqlalchemy import or_, cast,func
+from sqlalchemy import or_, cast,func, and_
 from app.enum import UserRole, ROLE_ORDER
 from datetime import datetime
 from sqlalchemy.dialects.postgresql import TEXT
 from app.models import DocumentVersion, Document, User, Department, DocumentApprovalStep,DocumentWorkflowRun
-
 
 def get_documents_service(
     db: Session,
@@ -17,46 +16,69 @@ def get_documents_service(
 ):
     offset = (page - 1) * size
 
+    # base: user's docs
     query = (
-        db.query(Document, DocumentVersion)
-        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        db.query(Document)
         .filter(
             Document.is_delete.is_(False),
             Document.uploaded_by == current_user["user_id"],
         )
     )
 
+    # filter by status if provided
     if status:
         query = query.filter(Document.status == status)
-    if search:
-        search_pattern = f"%{search.lower()}%"
-        query = query.filter(
-        or_(
-            func.lower(DocumentVersion.file_name).like(search_pattern),
-            func.lower(cast(DocumentVersion.tags, TEXT)).like(search_pattern),
-        )
-    )
-
 
     total = query.count()
 
-    results = (
-        query.order_by(Document.created_at.desc()).offset(offset).limit(size).all()
+    documents = (
+        query.order_by(Document.created_at.desc())
+        .offset(offset)
+        .limit(size)
+        .all()
     )
 
     data = []
-    for doc, version in results:
+
+    for doc in documents:
+
+        # ---------- FIRST VERSION (identity filename) ----------
+        first_version = (
+            db.query(DocumentVersion)
+            .filter(DocumentVersion.document_id == doc.id)
+            .order_by(DocumentVersion.version_number.asc())
+            .first()
+        )
+
+        # ---------- LATEST VERSION (current metadata) ----------
+        latest_version = (
+            db.query(DocumentVersion)
+            .filter(DocumentVersion.document_id == doc.id)
+            .order_by(DocumentVersion.version_number.desc())
+            .first()
+        )
+
+        if not latest_version:
+            continue
+
+        # ---------- SEARCH FILTER ----------
+        if search:
+            s = search.lower()
+            # check on first name (identity)
+            if first_version and s not in first_version.file_name.lower():
+                continue
+
         data.append(
             {
                 "document_id": doc.id,
                 "status": doc.status,
                 "current_version": doc.current_version,
                 "version": {
-                    "version_number": version.version_number,
-                    "file_name": version.file_name,
-                    "file_size_bytes": version.file_size_bytes,
-                    "tags": version.tags,
-                    "summary": version.summary,
+                    "version_number": latest_version.version_number,
+                    "file_name": first_version.file_name if first_version else latest_version.file_name,
+                    "file_size_bytes": latest_version.file_size_bytes,
+                    "tags": latest_version.tags,
+                    "summary": latest_version.summary,
                 },
             }
         )
@@ -69,6 +91,7 @@ def get_documents_service(
         "total": total,
         "data": data,
     }
+
 
 
 def get_user_hierarchy(db: Session, current_user: dict):

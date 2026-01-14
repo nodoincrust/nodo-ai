@@ -15,7 +15,6 @@ from app.models import (
     SessionMemorySummary,
 )
 
-
 def getOrCreateSessionForDocument(documentId: int) -> str:
     db: Session = SessionLocal()
     try:
@@ -25,21 +24,21 @@ def getOrCreateSessionForDocument(documentId: int) -> str:
             .first()
         )
 
+        # create if missing
         if not ai_doc:
-            raise ValueError(
-                f"AIDocument does not exist for documentId={documentId}"
-            )
+            ai_doc = AIDocument(document_id=documentId)
+            db.add(ai_doc)
+            db.flush()
 
-        # ✅ SESSION ALREADY EXISTS
+        # return existing session
         if ai_doc.session_id:
             return str(ai_doc.session_id)
 
-        # 🔥 CREATE SESSION
+        # create session
         session = ChatSession()
         db.add(session)
-        db.flush()  # generates UUID
+        db.flush()
 
-        # 🔗 LINK SESSION → DOCUMENT
         ai_doc.session_id = session.session_id
         db.commit()
 
@@ -47,6 +46,7 @@ def getOrCreateSessionForDocument(documentId: int) -> str:
 
     finally:
         db.close()
+
 
 # ======================================================
 # DOCUMENT CHUNKS

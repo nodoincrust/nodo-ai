@@ -12,33 +12,43 @@ from app.models import (
     DocumentSummary,
     ChatSession,
     SessionMessage,
-    SessionMemorySummary,
+    SessionMemorySummary,DocumentVersion
 )
-
-def getOrCreateSessionForDocument(documentId: int) -> str:
+def getOrCreateSessionForDocument(documentId: int, version: int) -> str:
     db: Session = SessionLocal()
     try:
+        # 1) Validate version exists
+        version_row = (
+            db.query(DocumentVersion)
+            .filter(
+                DocumentVersion.document_id == documentId,
+                DocumentVersion.version_number == version,
+            )
+            .first()
+        )
+        if not version_row:
+            raise ValueError(f"Version {version} does not exist for documentId={documentId}")
+
+        # 2) Fetch existing AI document (per document)
         ai_doc = (
             db.query(AIDocument)
             .filter(AIDocument.document_id == documentId)
             .first()
         )
 
-        # create if missing
         if not ai_doc:
-            ai_doc = AIDocument(document_id=documentId)
-            db.add(ai_doc)
-            db.flush()
+            raise ValueError(f"AIDocument missing for document {documentId}; upload expected")
 
-        # return existing session
+        # 3) If session exists → return
         if ai_doc.session_id:
             return str(ai_doc.session_id)
 
-        # create session
+        # 4) Create new session
         session = ChatSession()
         db.add(session)
         db.flush()
 
+        # 5) Attach to AI document
         ai_doc.session_id = session.session_id
         db.commit()
 
@@ -46,6 +56,8 @@ def getOrCreateSessionForDocument(documentId: int) -> str:
 
     finally:
         db.close()
+
+
 
 
 # ======================================================

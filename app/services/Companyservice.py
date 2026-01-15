@@ -224,7 +224,6 @@ def updateStatusDept(deptId: int, is_active: bool, db: Session, current_user: di
             status_code=500, detail="Failed to update department status"
         )
 
-
 def delete_department_details(deptId: int, db: Session, current_user: dict):
 
     department = (
@@ -241,11 +240,26 @@ def delete_department_details(deptId: int, db: Session, current_user: dict):
         raise HTTPException(404, "Department not found")
 
     try:
+        # delete + deactivate department
         department.is_delete = True
         department.is_active = False
-        department.head_user_id = None  # optional cleanup
+        department.head_user_id = None
+
+        # cascade delete users inside department
+        db.query(User).filter(
+            User.department_id == department.id,
+            User.company_id == current_user["company_id"],
+            User.is_delete.is_(False),
+        ).update(
+            {
+                "is_delete": True,
+                "is_active": False,
+                "department_id": None  # optional - break reference
+            }
+        )
 
         db.commit()
+        db.refresh(department)
 
         return {
             "statusCode": 200,
@@ -300,6 +314,12 @@ def update_dept_details(
 
     if payload.is_active is not None:
         department.is_active = payload.is_active
+        
+        db.query(User).filter(
+            User.department_id==department.id,
+            User.company_id==current_user["company_id"],
+            User.is_delete.is_(False)
+        ).update({"is_active":payload.is_active})
 
     try:
         db.commit()
@@ -549,23 +569,23 @@ def get_employee_list(
     offset = (page - 1) * size
 
     base_query = (
-        db.query(
-            User.id,
-            User.name,
-            User.email,
-            User.is_active,
-            User.department_id,
-            User.designation,
-            Department.name.label("department_name"),
-        )
-        .join(Department, Department.id == User.department_id)
-        .filter(
-            User.company_id == current_user["company_id"],
-            User.is_delete.is_(False),
-            User.role == UserRole.EMPLOYEE,
-            User.id != current_user["user_id"],
-        )
+    db.query(
+        User.id,
+        User.name,
+        User.email,
+        User.is_active,
+        User.department_id,
+        User.designation,
+        Department.name.label("department_name"),
     )
+    .outerjoin(Department, Department.id == User.department_id)
+    .filter(
+        User.company_id == current_user["company_id"],
+        User.is_delete.is_(False),
+        User.role == UserRole.EMPLOYEE,
+        User.id != current_user["user_id"],
+    )
+)
 
     if current_user.get("is_department_head"):
         base_query = base_query.filter(

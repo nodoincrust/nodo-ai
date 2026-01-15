@@ -48,8 +48,8 @@ def send_otp_email(to_email: str, otp: str):
 
     with smtplib.SMTP("smtpout.secureserver.net", 587) as server:
         server.starttls()
-        server.login("avinash@incrustsoftware.com","Incrust@123")
-        server.send_message(msg)
+        # server.login("avinash@incrustsoftware.com","Incrust@123")
+        # server.send_message(msg)
 
 
 def get_current_user(
@@ -207,16 +207,13 @@ def get_hierarchy_order(user: User, is_department_head: bool) -> int:
         return 2
     return 1
 
-def run_summary_job(job_id: str, documentId: int, version: int):
+def run_summary_job(job_id: str, documentId: int,version:int):
     try:
-        result = summarizeDocument(documentId, version)
-        jobs[job_id] = {"status": "done", "result": result, "version": version}
+        result = summarizeDocument(documentId,version)
+        jobs[job_id] = {"status": "done", "result": result}
     except Exception as e:
-        jobs[job_id] = {
-            "status": "error",
-            "error": str(e),
-            "version": version
-        }
+        jobs[job_id] = {"status": "error", "error": str(e)}
+
 
 
 

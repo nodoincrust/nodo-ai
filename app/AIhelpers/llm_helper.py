@@ -3,7 +3,7 @@ import re
 from typing import Iterable, List, Dict
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "llama3.1:latest"
+MODEL = "qwen2.5:3b-instruct-q4_0"
 
 SYSTEM_PROMPT = """
 You are an enterprise-grade AI assistant operating inside a document-centric,
@@ -51,8 +51,11 @@ def askLlm(*, context: str, question: str) -> Dict[str, Dict[str, str]]:
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.1,
-            "num_predict": 1000,
+            "temperature": 0.3,
+            "num_predict": 700,
+            "num_ctx": 6384,                              # Increased for large context
+            "top_k": 40,
+            "top_p": 0.9
         },
         "stream": False,
     }

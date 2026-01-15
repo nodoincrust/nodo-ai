@@ -141,43 +141,25 @@ def chatApi(*, document_id: int, query: str):
 #     return summarizeDocument(documentId)
 
 @router.post("/summary/start/{documentId}")
-def start_summary(documentId: int, version: int = Query(...),db: Session = Depends(get_db)):
-    # validate version first
-    version_row = (
-        db.query(DocumentVersion)
-        .filter(
-            DocumentVersion.document_id == documentId,
-            DocumentVersion.version_number == version
-        )
-        .first()
-    )
-
-    if not version_row:
-        raise HTTPException(status_code=404, detail="Version not found")
-
-    # ensure session exists (NO VERSION)
-    session_id = getOrCreateSessionForDocument(documentId)
-
+def start_summary(documentId: int,version: int = Query(...)):
     job_id = uuid4().hex
     jobs[job_id] = {"status": "running", "result": None}
 
-    thread = Thread(
-        target=run_summary_job,
-        args=(job_id, documentId, version),  # version stays here
-        daemon=True
-    )
+    # ensure session exists
+    getOrCreateSessionForDocument(documentId,version)
+
+    thread = Thread(target=run_summary_job, args=(job_id, documentId,version), daemon=True)
     thread.start()
 
-    return {"job_id": job_id, "session_id": session_id}
-
+    return {"job_id": job_id}
 
 
 @router.get("/summary/status/{job_id}")
-def get_summary_status(job_id: str):
+def get_status(job_id: str):
     job = jobs.get(job_id)
     if not job:
         return {"status": "not_found"}
-
+    
     return {
         "job_id": job_id,
         **job

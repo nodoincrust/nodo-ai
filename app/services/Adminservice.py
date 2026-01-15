@@ -42,7 +42,7 @@ def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Sessi
     user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
 
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="The provided credentials do not correspond to any registered user.")
     try:
         db.query(OTPLogin).filter(
             OTPLogin.user_id == user.id, OTPLogin.is_used.is_(False)
@@ -93,7 +93,7 @@ def verify_otp_service(email: str, otp: str, db: Session):
     user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
     print(user.__dict__)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="The provided credentials do not correspond to any registered user.")
 
     otp_entry = (
         db.query(OTPLogin)
@@ -106,7 +106,7 @@ def verify_otp_service(email: str, otp: str, db: Session):
         .order_by(OTPLogin.created_at.desc())
         .first()
     )
-    print("otp_entry",otp_entry.__dict__)
+    
 
     if not otp_entry:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")

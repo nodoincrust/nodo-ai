@@ -420,7 +420,7 @@ def get_document_full_details(
     # Viewer context (actionable for approver)
     viewer_id = current_user["user_id"]
     viewer_step = next((s for s in steps if s.assigned_to == viewer_id), None)
-    is_actionable = viewer_step and viewer_step.status != "PENDING"
+    is_actionable = viewer_step and viewer_step.status == "PENDING"
 
     # Rejected remarks (if any)
     rejected_step = next((s for s in steps if s.status == "REJECTED"), None)

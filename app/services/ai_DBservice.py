@@ -24,40 +24,171 @@ from app.models import AIDocument, ChatSession
 
 def getOrCreateSessionForDocument(
     document_id: int,
-    version_id: Optional[int] = None  # ← Now supports version_id
+    version_id: Optional[int] = None,
 ) -> str:
-    """
-    Get or create AI chat session for a document.
-    Supports version-specific sessions (recommended) or legacy (document-level).
-    """
     db: Session = SessionLocal()
     try:
-        # Prefer version-specific if provided
-        query = db.query(AIDocument).filter(AIDocument.document_id == document_id)
+        query = db.query(AIDocument).filter(
+            AIDocument.document_id == document_id
+        )
+
         if version_id is not None:
             query = query.filter(AIDocument.version_id == version_id)
 
         ai_doc = query.first()
 
-        if not ai_doc or not ai_doc.session_id:
-            # Create new session
-            session = ChatSession()
-            db.add(session)
-            db.flush()
-
-            ai_doc = AIDocument(
-                document_id=document_id,
-                version_id=version_id,
-                session_id=session.session_id,
+        if not ai_doc:
+            raise RuntimeError(
+                f"AIDocument not found for document_id={document_id}, version_id={version_id}. "
+                f"Document must be ingested first."
             )
-            db.add(ai_doc)
-            db.commit()
 
-        return str(ai_doc.session_id)
+        if ai_doc.session_id:
+            return str(ai_doc.session_id)
+
+        # Create ONLY ChatSession
+        session = ChatSession()
+        db.add(session)
+        db.flush()
+
+        ai_doc.session_id = session.session_id
+        db.commit()
+
+        return str(session.session_id)
+
+    finally:
+        db.close()
+        
+def createChunksForExistingAIDocument(
+    documentId: int,
+    versionId: int,
+    filePath: str,
+    filename: str,
+    fileType: str,
+    fileSizeMb: float,
+) -> dict:
+    """
+    Create chunks for an existing AIDocument without recreating sessions.
+    This avoids the session conflict issues in processDocument.
+    """
+    from app.AIhelpers.format_helper import iterateFilePages
+    from app.AIhelpers.chunk_helper import createDocumentChunks
+    from app.db import SessionLocal
+    from app.models import AIDocument
+    import os
+    
+    db: Session = SessionLocal()
+    ocrUsed = False
+    chunksCreated = 0
+    lastChunkIndex = 0
+    
+    try:
+        # Get existing AIDocument
+        aiDocument = (
+            db.query(AIDocument)
+            .filter(
+                AIDocument.document_id == documentId,
+                AIDocument.version_id == versionId,
+            )
+            .first()
+        )
+        
+        if not aiDocument:
+            return {
+                "status": "error",
+                "message": f"AIDocument not found for documentId={documentId}, versionId={versionId}"
+            }
+        
+        if not aiDocument.session_id:
+            return {
+                "status": "error",
+                "message": f"AIDocument has no session_id for documentId={documentId}, versionId={versionId}"
+            }
+        
+        # Create chunks
+        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
+            if not rawText or not rawText.strip():
+                continue
+
+            ocrUsed |= usedOcr
+
+            created = createDocumentChunks(
+                db=db,
+                ai_document_id=aiDocument.id,
+                session_id=str(aiDocument.session_id),
+                pages=[(pageNumber, rawText)],
+                start_index=lastChunkIndex,
+            )
+
+            lastChunkIndex += created
+            chunksCreated += created
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "document_id": documentId,
+            "chunks": chunksCreated,
+            "ocr_used": ocrUsed,
+            "file_size_mb": round(fileSizeMb, 2),
+        }
 
     except Exception as e:
         db.rollback()
-        raise RuntimeError(f"Failed to initialize AI session: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+    finally:
+        db.close()
+        
+def createAIDocumentForVersion(
+    document_id: int,
+    version_id: int,
+    filename: str,
+    file_type: str,
+    file_size_mb: float,
+) -> str:
+    """
+    Create AIDocument and session for a document version if it doesn't exist.
+    Returns the session_id.
+    """
+    db: Session = SessionLocal()
+    try:
+        # Check if AIDocument already exists
+        ai_doc = db.query(AIDocument).filter(
+            AIDocument.document_id == document_id,
+            AIDocument.version_id == version_id,
+        ).first()
+
+        if ai_doc:
+            if ai_doc.session_id:
+                return str(ai_doc.session_id)
+            # If exists but no session, create session
+            session = ChatSession()
+            db.add(session)
+            db.flush()
+            ai_doc.session_id = session.session_id
+            db.commit()
+            return str(session.session_id)
+
+        # Create new AIDocument with session
+        session = ChatSession()
+        db.add(session)
+        db.flush()
+
+        ai_doc = AIDocument(
+            document_id=document_id,
+            version_id=version_id,
+            session_id=session.session_id,
+            filename=filename,
+            file_type=file_type,
+            file_size_mb=file_size_mb,
+        )
+        db.add(ai_doc)
+        db.commit()
+
+        return str(session.session_id)
 
     finally:
         db.close()

@@ -1,11 +1,12 @@
 import uuid
 import shutil
 import os
+import logging
 from typing import Dict
 from sqlalchemy.orm import Session
 from app.helpers import normalize_role
 from sqlalchemy import func
-from fastapi import HTTPException, logger
+from fastapi import HTTPException
 from datetime import datetime
 from app.db import SessionLocal
 from app.models import (
@@ -24,6 +25,8 @@ from app.models import (
 from app.AIhelpers.chunk_helper import chunkText, createDocumentChunks
 from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
+
+logger = logging.getLogger(__name__)
 
 BASE_STORAGE_PATH = "storage"
 MAX_UPLOAD_MB = 50
@@ -197,6 +200,7 @@ def processDocument(
             session.session_id = aiDocument.session_id
 
         # ---------- CHUNKING & OCR ----------
+        lastChunkIndex = 0
         for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
             if not rawText or not rawText.strip():
                 continue

@@ -15,7 +15,7 @@ from app.services.document_service import (
     reject_document_step,
     reupload_document_version,get_approver_inbox,
 )
-from app.services.bouquetService import(
+from app.services.BouquetService import(
     createBouquet,getBouquetById,appendDocumentToBouquet,removeDocumentFromBouquet,deleteBouquet,getAllBoqList
 )
  

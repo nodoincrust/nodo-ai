@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from fastapi import HTTPException, BackgroundTasks
 from jose import jwt
-import logger 
 import os
 from sqlalchemy import or_, func
 from app.models import (

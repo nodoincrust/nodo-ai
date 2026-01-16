@@ -1,17 +1,17 @@
-# summary_service.py (full function)
-
 import logging
 import json
 import re
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
+from datetime import datetime, timezone
 
 from app.db import SessionLocal
-from app.models import DocumentChunk, DocumentSummary, AIDocument
+from app.models import DocumentChunk, DocumentSummary, AIDocument, DocumentVersion
 from app.AIhelpers.llm_helper import askLlm, RAGHelper
-from .TagServices import select_top_chunks, generateTagsFromLLM, storeDocumentTags
+from app.services.ai_DBservice import getOrCreateSessionForDocument, createChunksForExistingAIDocument
+from .TagServices import select_top_chunks
 
 logger = logging.getLogger("ai.summaryService")
 
@@ -101,26 +101,29 @@ def _fallback_keywords(text: str) -> List[str]:
         return []
 
 
-def summarizeDocument(documentId: int, version_id: int, force_refine: bool = False) -> Dict[str, Any]:
-    """
-    Generate or update summary, tags, and citations for a specific document version.
-    Fully version-aware: uses version_id to fetch/store everything correctly.
-    """
+def summarizeDocument(documentId: int, version: int, force_refine: bool = False) -> Dict[str, Any]:
     db: Session = SessionLocal()
     try:
-        # 1. Get the AI document for this exact version
+        version_id = version
+        
+        logger.info(f"=== Starting summarizeDocument for documentId={documentId}, version_id={version_id} ===")
+        
+        # Get AI document for this exact version
         ai_doc = db.query(AIDocument).filter(
             AIDocument.document_id == documentId,
             AIDocument.version_id == version_id
         ).first()
 
         if not ai_doc:
+            logger.warning(f"AIDocument not found for document {documentId}, version {version_id}")
             return {
                 "status": "processing",
                 "message": f"AIDocument not ready for document {documentId}, version {version_id}"
             }
 
-        # 2. Check for existing chunks
+        logger.info(f"Found AIDocument: id={ai_doc.id}, session_id={ai_doc.session_id}")
+
+        # Check for existing chunks
         chunks = (
             db.query(DocumentChunk)
             .filter(DocumentChunk.ai_document_id == ai_doc.id)
@@ -128,20 +131,45 @@ def summarizeDocument(documentId: int, version_id: int, force_refine: bool = Fal
             .all()
         )
 
+        logger.info(f"Found {len(chunks)} chunks for ai_document_id={ai_doc.id}")
+
         if not chunks:
-            logger.info(f"No chunks found for document {documentId} version {version_id} — triggering chunk creation")
+            logger.info(f"No chunks found - triggering chunk creation")
 
-            from app.services.document_service import processDocument  # late import
+            # Ensure session exists for the AIDocument
+            try:
+                session_id = getOrCreateSessionForDocument(documentId, version_id)
+                logger.info(f"Ensured session exists: {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to ensure session exists: {e}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to setup session: {str(e)}"
+                }
 
-            process_result = processDocument(
-                document_id=documentId,
-                versionId=version_id,  # Use versionId param
+            # Get the file path from DocumentVersion
+            doc_version = db.query(DocumentVersion).filter(DocumentVersion.id == version_id).first()
+            if not doc_version:
+                logger.error(f"DocumentVersion not found for version_id={version_id}")
+                return {
+                    "status": "error",
+                    "message": f"DocumentVersion not found for version_id={version_id}"
+                }
+
+            # Use the new function to create chunks without session conflicts
+            process_result = createChunksForExistingAIDocument(
+                documentId=documentId,
+                versionId=version_id,
+                filePath=doc_version.file_path,
                 filename=ai_doc.filename or "unknown",
                 fileType=ai_doc.file_type or "pdf",
-                fileSizeMb=ai_doc.file_size_mb or 0.0,
+                fileSizeMb=float(ai_doc.file_size_mb) if ai_doc.file_size_mb else 0.0,
             )
 
+            logger.info(f"Process result: {process_result}")
+
             if process_result.get("status") not in ("success", "already_processed"):
+                logger.warning(f"Chunk creation failed or in progress")
                 return {
                     "status": "processing",
                     "message": "Chunk creation in progress or failed",
@@ -157,34 +185,40 @@ def summarizeDocument(documentId: int, version_id: int, force_refine: bool = Fal
             )
 
             if not chunks:
+                logger.error("Failed to create chunks after attempt")
                 return {"status": "error", "message": "Failed to create chunks after attempt"}
 
-        # 3. Limit context size for LLM
         if len(chunks) > SUMMARY_TOP_K:
+            logger.info(f"Selecting top {SUMMARY_TOP_K} chunks from {len(chunks)} total")
             chunks = select_top_chunks(db, chunks, "key content for document summary and tags", top_k=SUMMARY_TOP_K)
 
         context_parts = []
         default_citations = []
 
         for c in chunks:
-            context_parts.append(f"[PAGE {c.page_number}] {c.chunk_text}")
-            default_citations.append({"page_number": c.page_number})
+            page_num = c.page_number if c.page_number else 1
+            context_parts.append(f"[PAGE {page_num}] {c.chunk_text}")
+            default_citations.append({"page_number": page_num})
 
         document_context = "\n\n".join(context_parts)[:MAX_CONTEXT_CHARS]
+        logger.info(f"Prepared context: {len(document_context)} chars from {len(chunks)} chunks")
 
-        # 4. Check existing summary for this version
         existing = db.query(DocumentSummary).filter(
             DocumentSummary.ai_document_id == ai_doc.id,
             DocumentSummary.version_id == version_id
         ).first()
 
-        # 5. Prepare prompt
+        logger.info(f"Existing summary found: {existing is not None}")
+
         system_prompt = BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE
 
         is_refinement = force_refine or (existing and existing.summary_text)
 
         if is_refinement:
             system_prompt += "\n" + REFINEMENT_PROMPT
+            logger.info("Running in REFINEMENT mode")
+        else:
+            logger.info("Running in INITIAL GENERATION mode")
 
         llm_context = (
             f"{system_prompt}\n\n"
@@ -192,92 +226,142 @@ def summarizeDocument(documentId: int, version_id: int, force_refine: bool = Fal
             f"DOCUMENT EXCERPTS:\n{document_context}"
         )
 
-        # 6. Call LLM
+        logger.info(f"Calling LLM with context length: {len(llm_context)}")
+
         llm_result = askLlm(
             context=llm_context,
             question="Generate or refine the document summary with tags and citations.",
         )
 
-        parsed = safeJsonParse(llm_result["data"]["answer"])
+        logger.info(f"LLM result status: {llm_result.get('status')}")
+
+        if llm_result.get("status") != "success":
+            logger.error(f"LLM call failed: {llm_result}")
+            return {
+                "status": "error",
+                "message": f"LLM call failed: {llm_result.get('data', {}).get('answer', 'Unknown error')}"
+            }
+
+        raw_answer = llm_result["data"]["answer"]
+        logger.info(f"LLM raw answer (first 200 chars): {raw_answer[:200]}")
+
+        parsed = safeJsonParse(raw_answer)
 
         if not parsed["summary"]:
+            logger.error("Summary generation failed - no valid summary returned")
             return {"status": "error", "message": "Summary generation failed - no valid summary returned"}
 
-        # 7. Clean and limit tags
+        logger.info(f"Parsed summary length: {len(parsed['summary'])}, tags count: {len(parsed.get('tags', []))}")
+
         tags = [
             t.title().strip()
             for t in parsed["tags"]
-            if isinstance(t, str) and 2 <= len(t.strip()) <= 30
-        ][:10]
+            if isinstance(t, str) and 2 <= len(t.strip()) <= 30][:10]
 
         if not tags:
-            logger.warning("Tags missing; using keyword fallback.")
+            logger.warning("Tags missing; using keyword fallback")
             tags = _fallback_keywords(parsed["summary"])
 
         citations = parsed["citations"] or default_citations
 
-        # 8. Optional RAG refinement (second pass)
+        logger.info(f"Final tags: {tags}")
+
+        # RAG refinement
         should_refine_with_rag = not is_refinement and (not existing or len(tags) < 5)
 
         if should_refine_with_rag:
             logger.info("Performing second-pass RAG refinement")
-            rag = RAGHelper(db)
-            retrieved = rag.query(parsed["summary"], top_k=4)
+            try:
+                rag = RAGHelper(db)
+                retrieved = rag.query(parsed["summary"], top_k=4)
 
-            if retrieved:
-                examples = '\n'.join([
-                    f"Similar document summary: {r['summary']}\nTags: {', '.join(r['tags'])}"
-                    for r in retrieved
-                ])
+                if retrieved:
+                    examples = '\n'.join([
+                        f"Similar document summary: {r['summary']}\nTags: {', '.join(r['tags'])}"
+                        for r in retrieved
+                    ])
 
-                refinement_prompt = (
-                    BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE + "\n" + REFINEMENT_PROMPT +
-                    f"\n\nExamples from similar documents:\n{examples}\n\n"
-                    f"PREVIOUS SUMMARY:\n{parsed['summary']}\n\n"
-                    f"DOCUMENT EXCERPTS:\n{document_context}"
-                )
+                    refinement_prompt = (
+                        BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE + "\n" + REFINEMENT_PROMPT +
+                        f"\n\nExamples from similar documents:\n{examples}\n\n"
+                        f"PREVIOUS SUMMARY:\n{parsed['summary']}\n\n"
+                        f"DOCUMENT EXCERPTS:\n{document_context}"
+                    )
 
-                refinement_result = askLlm(
-                    context=refinement_prompt,
-                    question="Refine the summary, improve tags using similar document examples."
-                )
+                    logger.info("Calling LLM for RAG refinement")
+                    refinement_result = askLlm(
+                        context=refinement_prompt,
+                        question="Refine the summary, improve tags using similar document examples."
+                    )
 
-                refined_parsed = safeJsonParse(refinement_result["data"]["answer"])
+                    if refinement_result.get("status") == "success":
+                        refined_parsed = safeJsonParse(refinement_result["data"]["answer"])
 
-                if refined_parsed["summary"]:
-                    parsed["summary"] = refined_parsed["summary"]
-                    parsed["tags"] = refined_parsed["tags"]
-                    parsed["citations"] = refined_parsed["citations"] or citations
+                        if refined_parsed["summary"]:
+                            parsed["summary"] = refined_parsed["summary"]
+                            parsed["tags"] = refined_parsed["tags"]
+                            parsed["citations"] = refined_parsed["citations"] or citations
 
-                    tags = [
-                        t.title().strip()
-                        for t in parsed["tags"]
-                        if isinstance(t, str) and 2 <= len(t.strip()) <= 30
-                    ][:10] or tags
+                            tags = [
+                                t.title().strip()
+                                for t in parsed["tags"]
+                                if isinstance(t, str) and 2 <= len(t.strip()) <= 30
+                            ][:10] or tags
+
+                            logger.info("RAG refinement completed successfully")
+            except Exception as rag_exc:
+                logger.warning(f"RAG refinement failed (non-critical): {rag_exc}")
 
         # 9. Save/Update summary per version
-        if existing:
-            existing.summary_text = parsed["summary"]
-            existing.tags = tags
-            existing.citations = citations
-            existing.updated_at = func.now()
-        else:
-            new_summary = DocumentSummary(
-                ai_document_id=ai_doc.id,
-                version_id=version_id,           # ← Stored per version!
-                summary_text=parsed["summary"],
-                tags=tags,
-                citations=citations,
-            )
-            db.add(new_summary)
+        try:
+            if existing:
+                logger.info(f"Updating existing summary for ai_document_id={ai_doc.id}")
+                existing.summary_text = parsed["summary"]
+                existing.tags = tags
+                existing.citations = citations
+                existing.updated_at = datetime.now(timezone.utc)
+            else:
+                logger.info(f"Creating new summary for ai_document_id={ai_doc.id}")
+                new_summary = DocumentSummary(
+                    ai_document_id=ai_doc.id,
+                    version_id=version_id,
+                    summary_text=parsed["summary"],
+                    tags=tags,
+                    citations=citations,
+                )
+                db.add(new_summary)
 
-        db.commit()
+            db.commit()
+            logger.info("Summary committed to database")
+        except IntegrityError as e:
+            logger.warning(f"IntegrityError on summary save, attempting update: {e}")
+            db.rollback()
+            # Try to update existing
+            existing = db.query(DocumentSummary).filter(
+                DocumentSummary.ai_document_id == ai_doc.id,
+                DocumentSummary.version_id == version_id
+            ).first()
+            if existing:
+                existing.summary_text = parsed["summary"]
+                existing.tags = tags
+                existing.citations = citations
+                existing.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                logger.info("Summary updated after IntegrityError")
+            else:
+                logger.error("Could not find or create summary after IntegrityError")
+                raise
 
-        # 10. Update vector embedding (for RAG search)
-        rag = RAGHelper(db)
-        rag.update_summary_embedding(ai_doc.id, parsed["summary"])
+        # Update vector embedding
+        try:
+            logger.info("Updating summary embedding")
+            rag = RAGHelper(db)
+            rag.update_summary_embedding(ai_doc.id, parsed["summary"])
+            logger.info("Embedding updated successfully")
+        except Exception as emb_exc:
+            logger.warning(f"Embedding update failed (non-critical): {emb_exc}")
 
-        return {
+        result = {
             "status": "success",
             "refined": is_refinement or should_refine_with_rag,
             "summary": parsed["summary"],
@@ -287,8 +371,11 @@ def summarizeDocument(documentId: int, version_id: int, force_refine: bool = Fal
             "version_id": version_id
         }
 
+        logger.info(f"=== Summary generation completed successfully ===")
+        return result
+
     except Exception as exc:
-        logger.exception("Summary generation failed")
+        logger.exception(f"Summary generation failed with exception: {exc}")
         db.rollback()
         return {"status": "error", "message": str(exc)}
 

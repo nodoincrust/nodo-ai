@@ -1,6 +1,6 @@
 import requests
 import re
-from typing import Dict, List, Iterable
+from typing import Dict, List
 import time
 import logging
 from sqlalchemy.orm import Session
@@ -9,9 +9,8 @@ from .embedding_helper import createEmbeddings
 
 logger = logging.getLogger("ai.llm_helper")
 
-OLLAMA_URL = "http://localhost:11434/api/chat"   # Ollama endpoint
-MODEL = "qwen2.5:3b-instruct-q4_0"                 # Optimized local model
-
+OLLAMA_URL = "http://localhost:11434/api/chat"
+MODEL = "qwen2.5:3b-instruct-q4_0"
 
 SYSTEM_PROMPT = """
 You are a document-grounded AI assistant.
@@ -19,7 +18,7 @@ You are a document-grounded AI assistant.
 Rules:
 • Answer only from the provided document context and session memory
 • Do not hallucinate, guess, or use external knowledge
-• If the answer is not present, reply: “The provided document does not contain this information”
+• If the answer is not present, reply: "The provided document does not contain this information"
 
 Behavior:
 • Be concise and structured when useful
@@ -42,19 +41,22 @@ _STOPWORDS = {
     "that", "this", "are", "was", "it", "be", "or", "from", "at", "an", "which",
 }
 
-# Removes non-printable chars
+
 def cleanInputText(text: str) -> str:
+    """Removes non-printable chars"""
     return _NON_PRINTABLE_RE.sub(" ", text)  
 
-# Extracts meaningful tokens only
+
 def tokenizeText(text: str) -> List[str]:
+    """Extracts meaningful tokens only"""
     return [
         t for t in _TOKEN_RE.findall(text.lower())
         if t not in _STOPWORDS
     ]  
 
- # Splits text into sentences
+
 def splitIntoSentences(text: str) -> List[str]:
+    """Splits text into sentences"""
     return [
         s.replace("\n", " ").strip()
         for s in _SENTENCE_SPLIT_RE.split(text.strip())
@@ -63,7 +65,8 @@ def splitIntoSentences(text: str) -> List[str]:
 
 
 def compressSentence(sentence: str, maxChars: int = 200) -> str:
-    for sep in (",", ";", " - ", " — ", ":"):
+    """Compress a sentence to max characters"""
+    for sep in (",", ";", " - ", " – ", ":"):
         if sep in sentence:
             sentence = sentence.split(sep)[0]
             break
@@ -73,23 +76,32 @@ def compressSentence(sentence: str, maxChars: int = 200) -> str:
         else sentence[: maxChars - 1].rstrip() + "…"
     )
 
-def optimizeContext(context: str, maxSentences: int = 50) -> str:  # Increased for large docs
-    context = cleanInputText(context)                     # Sanitizes input
-    tokens = set(tokenizeText(context))                   # Token set for relevance
-    sentences = splitIntoSentences(context)               # Sentence segmentation
+
+def optimizeContext(context: str, maxSentences: int = 50) -> str:
+    """Optimize context for LLM by keeping relevant sentences"""
+    context = cleanInputText(context)
+    tokens = set(tokenizeText(context))
+    sentences = splitIntoSentences(context)
 
     filtered = []
     for s in sentences:
         if tokens.intersection(tokenizeText(s)):
-            filtered.append(compressSentence(s))          # Keeps only relevant sentences
+            filtered.append(compressSentence(s))
         if len(filtered) >= maxSentences:
             break
 
-    return "\n".join(filtered)                             # Returns compact context
+    return "\n".join(filtered)
 
 
 def askLlm(*, context: str, question: str, retries: int = 3, system_prompt: str = SYSTEM_PROMPT) -> Dict[str, Dict[str, str]]:
-    optimizedContext = optimizeContext(context)            # Shrinks context before LLM
+    """
+    Call the LLM with optimized context and question.
+    Returns: {"status": "success"/"error", "data": {"answer": "..."}}
+    """
+    logger.info(f"askLlm called - context length: {len(context)}, question: {question[:100]}...")
+    
+    optimizedContext = optimizeContext(context)
+    logger.info(f"Optimized context length: {len(optimizedContext)}")
 
     payload = {
         "model": MODEL,
@@ -99,50 +111,92 @@ def askLlm(*, context: str, question: str, retries: int = 3, system_prompt: str 
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.4,                            # Faster, more deterministic
-            "num_predict": 1000,                           # Increased for richer outputs
-            "num_ctx": 16384,                              # Increased for large context
+            "temperature": 0.4,
+            "num_predict": 1000,
+            "num_ctx": 16384,
             "top_k": 40,
             "top_p": 0.9        
         },
         "stream": False,
     }
 
+    logger.info(f"Sending request to Ollama at {OLLAMA_URL}")
+
     for attempt in range(retries):
         try:
+            logger.info(f"Attempt {attempt + 1}/{retries}")
+            
             response = requests.post(
                 OLLAMA_URL,
                 json=payload,
-                timeout=140,                                # Increased timeout for large
+                timeout=140,
             )
+            
+            logger.info(f"Response status code: {response.status_code}")
             response.raise_for_status()
+
+            response_json = response.json()
+            logger.info(f"Response received from LLM")
+            
+            answer = response_json.get("message", {}).get("content", "")
+            logger.info(f"LLM answer length: {len(answer)}")
 
             return {
                 "status": "success",
                 "data": {
-                    "answer": response.json()["message"]["content"]
+                    "answer": answer
                 },
             }
-        except Exception as exc:
+            
+        except requests.exceptions.ConnectionError as conn_err:
+            logger.error(f"Connection error to Ollama: {conn_err}")
             if attempt == retries - 1:
-                logger.error(f"LLM call failed after {retries} attempts: {exc}")
+                return {
+                    "status": "error",
+                    "data": {
+                        "answer": f"Cannot connect to Ollama at {OLLAMA_URL}. Is Ollama running?"
+                    },
+                }
+            time.sleep(2 ** attempt)
+            
+        except requests.exceptions.Timeout as timeout_err:
+            logger.error(f"Timeout calling Ollama: {timeout_err}")
+            if attempt == retries - 1:
+                return {
+                    "status": "error",
+                    "data": {
+                        "answer": "Request to LLM timed out"
+                    },
+                }
+            time.sleep(2 ** attempt)
+            
+        except Exception as exc:
+            logger.exception(f"LLM call failed on attempt {attempt + 1}")
+            if attempt == retries - 1:
                 return {
                     "status": "error",
                     "data": {
                         "answer": str(exc)
                     },
                 }
-            time.sleep(2 ** attempt)  # Exponential backoff
+            time.sleep(2 ** attempt)
 
 
 class RAGHelper:
+    """Helper class for RAG (Retrieval Augmented Generation)"""
+    
     def __init__(self, db: Session):
         self.db = db
 
     def query(self, text: str, top_k: int = 3, min_similarity: float = 0.7) -> List[Dict[str, any]]:
-
+        """
+        Query similar documents using embeddings
+        Returns list of similar document summaries
+        """
         try:
+            logger.info(f"RAG query for text: {text[:100]}...")
             embedding = createEmbeddings([text])[0]
+            
             # Use pgvector cosine distance operator '<->' (smaller distance = more similar)
             results = (
                 self.db.query(DocumentSummary)
@@ -150,17 +204,35 @@ class RAGHelper:
                 .limit(top_k)
                 .all()
             )
-            return [{'id': r.ai_document_id, 'summary': r.summary_text, 'tags': r.tags} for r in results]
+            
+            logger.info(f"RAG found {len(results)} similar documents")
+            
+            return [
+                {
+                    'id': r.ai_document_id, 
+                    'summary': r.summary_text, 
+                    'tags': r.tags or []
+                } 
+                for r in results
+            ]
         except Exception as e:
             logger.error(f"RAG query failed: {e}")
-            return []  # Fallback: Empty
+            return []
 
     def update_summary_embedding(self, ai_document_id: int, summary: str):
+        """
+        Update the embedding for a document summary
+        """
         try:
+            logger.info(f"Updating embedding for ai_document_id={ai_document_id}")
             embedding = createEmbeddings([summary])[0]
-            summary_record = self.db.query(DocumentSummary).filter_by(ai_document_id=ai_document_id).first()
+            
+            summary_record = self.db.query(DocumentSummary).filter_by(
+                ai_document_id=ai_document_id
+            ).first()
+            
             if summary_record:
-                summary_record.embedding = embedding  # Assuming column exists
+                summary_record.embedding = embedding
                 self.db.commit()
                 logger.info(f"Updated embedding for summary {ai_document_id}")
             else:

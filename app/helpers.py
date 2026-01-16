@@ -41,7 +41,7 @@ def send_otp_email(to_email: str, otp: str):
     with smtplib.SMTP("smtpout.secureserver.net", 587) as server:
         server.starttls()
         # server.login("avinash@incrustsoftware.com","Incrust@123")
-        server.send_message(msg)
+        # server.send_message(msg)
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -169,20 +169,23 @@ def get_hierarchy_order(user: User, is_department_head: bool) -> int:
         return 2
     return 1
 
-def run_summary_job(job_id: str, documentId: int, version_id: int):
+def run_summary_job(job_id: str, documentId: int, version: int):
     try:
-        result = summarizeDocument(documentId, version_id=version_id)  # Pass version_id
+        result = summarizeDocument(documentId, version=version)
         jobs[job_id] = {"status": "done", "result": result}
     except Exception as e:
         jobs[job_id] = {"status": "error", "error": str(e)}
 
 def normalize_role(step):
     role = step.approver_type
+
     # company admin
     if role == "COMPANY_ADMIN" or str(role) == "COMPANY_ADMIN":
         return "Company Admin"
+
     # dept head
     if role == "DEPARTMENT_HEAD" or str(role) == "DEPARTMENT_HEAD":
         return "Department Head"
+
     # uploader
     return "Uploader"

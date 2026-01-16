@@ -1,136 +1,118 @@
-import shutil
-import os
-import tempfile
-from fastapi import (
-    APIRouter,
-    UploadFile,
-    File,
-    HTTPException,
-    BackgroundTasks,
-    Depends,
-    Query,
-    Body
-)
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks,Form,Body
 from sqlalchemy.orm import Session
-from app.helpers import get_current_user, get_db
-from app.schemas import (
-    DocumentSaveSchema,
-    CreateEmployeeSchema,
-    GetApprovalDocumentList,
-    UpdateEmployeeSchema,
-)
-from app.services.BouquetService import appendDocumentToBouquet, createBouquet, deleteBouquet, getAllBouquets, removeDocumentFromBouquet
+import shutil
+import tempfile
+import os
+from app.models import Document
+from app.helpers import get_db, get_current_user
+from app.schemas import DocumentSaveSchema,GetApprovalDocumentList
 from app.services.document_service import (
-    approve_document_step,
-    get_approver_inbox,
     processDocument,
     createDocumentDraft,
-    reject_document_step,
-    reupload_document_version,
     saveDocument,
     get_document_full_details,
+    approve_document_step,
+    reject_document_step,
+    reupload_document_version,get_approver_inbox,
 )
-from app.services.Companyservice import (
-    add_employee_service,
-    update_employee_service,
-    delete_employee_details,
-    get_employee_list,
+from app.services.bouquetService import(
+    createBouquet,getBouquetById,appendDocumentToBouquet,removeDocumentFromBouquet,deleteBouquet,getAllBoqList
 )
-from app.services.ai_DBservice import getOrCreateSessionForDocument
-
+ 
 router = APIRouter(prefix="/nodo/newdocuments")
-
-ASYNC_THRESHOLD_MB = 2.0
-
-
-# ────────────────────────────────────────────────
-# Document Endpoints
-# ────────────────────────────────────────────────
-
+ 
+ 
+@router.get("/")
+def greet():
+    return {"status": "ok"}
+ 
+ 
 @router.post("/upload")
 async def uploadDocument(
-    backgroundTasks: BackgroundTasks,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    current_user=Depends(get_current_user),
+    documentId: int | None = Form(None),   # <--- ADDED
     db: Session = Depends(get_db),
+    currentUser=Depends(get_current_user),
 ):
-    print("Current user:", current_user)
-
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    _, extension = os.path.splitext(file.filename)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
+ 
+    suffix = os.path.splitext(file.filename)[1] or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
         tempPath = tmp.name
-
-    if not os.path.exists(tempPath) or os.path.getsize(tempPath) == 0:
+ 
+    if os.path.getsize(tempPath) == 0:
         os.remove(tempPath)
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
+ 
     fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
-
-    try:
-        # createDocumentDraft moves file → returns permanent path info
-        draft_result = createDocumentDraft(
-            db=db,
-            tempFilePath=tempPath,
-            originalFilename=file.filename,
-            departmentId=current_user.get("department_id"),
-            currentUser=current_user,
-        )
-
-        # Extract important values from result
-        document_id = draft_result["document_id"]
-        permanent_file_path = draft_result["file_path"]  # ← This is the new location!
-
-        # Use permanent path for processing (file is now here!)
-        if fileSizeMb >= ASYNC_THRESHOLD_MB:
-            backgroundTasks.add_task(
+ 
+    # === REUPLOAD CASE ===
+    if documentId:
+        document = db.query(Document).filter(
+            Document.id == documentId,
+            Document.is_delete.is_(False)
+        ).first()
+ 
+        if document and document.status == "REJECTED":
+            newVersion = reupload_document_version(
+                db=db,
+                document_id=document.id,
+                file_path=tempPath,
+                file_name=file.filename,
+                created_by=currentUser["user_id"],
+            )
+ 
+            # AI Processing for v2
+            background_tasks.add_task(
                 processDocument,
-                filePath=permanent_file_path,   # ← Fixed: use permanent path
-                document_id=document_id,
+                filePath=tempPath,
+                documentId=document.id,
+                versionId=newVersion["version_id"],
                 filename=file.filename,
                 fileType=file.content_type,
                 fileSizeMb=fileSizeMb,
             )
+ 
             return {
-                "status": "processing",
-                "documentId": document_id,
-                "fileSizeMb": round(fileSizeMb, 2),
+                "status": "success",
+                "documentId": document.id,
+                "version": newVersion["version"],
+                "version_id": newVersion["version_id"],
+                "filepath": newVersion["file_path"]
             }
-
-        result = processDocument(
-            filePath=permanent_file_path, 
-            document_id=document_id,
-            filename=file.filename,
-            fileType=file.content_type,
-            fileSizeMb=fileSizeMb,
-        )
-
-        sessionId = getOrCreateSessionForDocument(document_id)
-
-        return {
-            "status": "success",
-            "documentId": document_id,
-            "sessionId": sessionId,
-            "chunks": result.get("chunks", 0),
-            "ocrUsed": result.get("ocr_used", False),
-            "fileSizeMb": round(fileSizeMb, 2),
-        }
-
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    finally:
-        # Only try to clean temp file if it still exists (in case draft failed)
-        if os.path.exists(tempPath):
-            try:
-                os.remove(tempPath)
-            except Exception:
-                pass
-
+ 
+    # === NORMAL NEW DOCUMENT FLOW ===
+    result = createDocumentDraft(
+        db=db,
+        tempFilePath=tempPath,
+        originalFilename=file.filename,
+        departmentId=currentUser.get("department_id"),
+        currentUser=currentUser,
+    )
+ 
+    businessDocumentId = result["document_id"]
+    permanentPath = result["file_path"]
+    versionId = result["version_id"]
+ 
+    background_tasks.add_task(
+        processDocument,
+        filePath=permanentPath,
+        documentId=businessDocumentId,
+        versionId=versionId,
+        filename=file.filename,
+        fileType=file.content_type,
+        fileSizeMb=fileSizeMb,
+    )
+ 
+    return {
+        "status": "success",
+        "documentId": businessDocumentId,
+        "filepath": permanentPath,
+        "fileSizeMb": round(fileSizeMb, 2),
+    }
+ 
+ 
 @router.post("/{documentId}/save")
 def saveDocumentApi(
     documentId: int,
@@ -144,14 +126,14 @@ def saveDocumentApi(
         payload=payload,
         currentUser=currentUser,
     )
-
+ 
     return {
         "status": "success",
         "message": "Draft metadata saved",
         "data": result,
     }
-
-
+ 
+ 
 @router.get("/{document_id}/details")
 def get_document_details(
     document_id: int,
@@ -168,7 +150,8 @@ def get_document_details(
             current_user=current_user,
         ),
     }
-
+ 
+ 
 @router.post("/approve/{document_id}")
 def approve_document(
     document_id: int,
@@ -185,29 +168,30 @@ def approve_document(
         "statusCode": 200,
         "message": result["message"],
     }
-
-
+ 
+ 
 @router.post("/reject/{document_id}")
 def reject_document(
     document_id: int,
-    payload: dict = Body(...),
+    payload:dict,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     remarks = payload.get("reason") if payload else None
-    print("remarks-----------", remarks)
+    print("remarks-----------",remarks)
     result = reject_document_step(
         db=db,
         document_id=document_id,
         user_id=current_user["user_id"],
         remarks=remarks,
     )
+ 
     return {
         "statusCode": 200,
         "message": result["message"],
     }
-
-
+ 
+ 
 @router.post("/reupload/{document_id}")
 async def reupload_document(
     document_id: int,
@@ -217,6 +201,7 @@ async def reupload_document(
 ):
     # only uploader can reupload
     from app.models import Document
+ 
     document = (
         db.query(Document)
         .filter(
@@ -226,28 +211,30 @@ async def reupload_document(
         )
         .first()
     )
+ 
     if not document:
         raise HTTPException(403, "Only uploader can reupload document")
-
+ 
     # save temp
     suffix = os.path.splitext(file.filename)[1] or ".pdf"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
         temp_path = tmp.name
-
+ 
     if os.path.getsize(temp_path) == 0:
         os.remove(temp_path)
         raise HTTPException(400, "Uploaded file is empty")
-
+ 
     # permanent path
     company_id = current_user["company_id"]
     doc_dir = f"storage/companies/{company_id}/documents/{document_id}"
     os.makedirs(doc_dir, exist_ok=True)
+ 
     new_file_path = os.path.join(
         doc_dir, f"v{document.current_version + 1}_{file.filename}"
     )
     shutil.move(temp_path, new_file_path)
-
+ 
     result = reupload_document_version(
         db=db,
         document_id=document_id,
@@ -255,19 +242,21 @@ async def reupload_document(
         file_name=file.filename,
         created_by=current_user["user_id"],
     )
+ 
     return {
         "statusCode": 200,
         "message": result["message"],
     }
-
-
+ 
+ 
+ 
 @router.post("/approver/inbox")
 def approver_inbox(
-    payload: GetApprovalDocumentList,  # Assuming this schema exists
+    payload:GetApprovalDocumentList,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    print("Payload:", payload.dict())
+    print("asdfghjkl",payload.dict())
     return get_approver_inbox(
         db=db,
         current_user=current_user,
@@ -276,12 +265,9 @@ def approver_inbox(
         page=payload.page,
         pagelimit=payload.pagelimit
     )
-
-
-# ────────────────────────────────────────────────
-# Bouquet Endpoints
-# ────────────────────────────────────────────────
-
+ 
+ 
+ 
 @router.post("/bouquets")
 def createBouquetEndpoint(
     payload: dict = Body(...),
@@ -290,42 +276,46 @@ def createBouquetEndpoint(
 ):
     name = payload.get("name")
     description = payload.get("description")
+ 
     if not name:
         raise HTTPException(400, "name is required")
+ 
     bouquet = createBouquet(
         db=db,
         name=name,
         description=description,
         createdBy=currentUser["user_id"],
     )
+ 
     return {
         "id": bouquet.id,
         "message": "Bouquet created successfully",
     }
-
-
+ 
 @router.get("/getAllBoq")
-def getAllBoq(
+def getAllBoq( db: Session = Depends(get_db),currentUser: dict = Depends(get_current_user)):
+   
+    result= getAllBoqList(db=db,current_user=currentUser)
+   
+    if not result:
+        raise HTTPException("Boq not found")
+    else:
+        return result
+   
+   
+@router.get("/bouquets/{bouquetId}")
+def getBouquet(
+    bouquetId: int,
     db: Session = Depends(get_db),
-    currentUser: dict = Depends(get_current_user),
 ):
-    result = getAllBouquets(db=db, currentUserId=currentUser["user_id"])  # Assuming function name
+    result = getBouquetById(db, bouquetId)
+ 
     if not result:
         raise HTTPException(404, "Bouquet not found")
+ 
     return result
-
-
-# @router.get("/bouquets/{bouquetId}")
-# def getBouquet(
-#     bouquetId: int,
-#     db: Session = Depends(get_db),
-# ):
-#     result = getBouquetById(db, bouquetId)
-#     if not result:
-#         raise HTTPException(404, "Bouquet not found")
-#     return result
-
-
+ 
+ 
 @router.delete("/bouquets/{bouquetId}")
 def deleteBouquetEndpoint(
     bouquetId: int,
@@ -338,8 +328,8 @@ def deleteBouquetEndpoint(
         currentUserId=currentUser["user_id"],
     )
     return {"message": "Bouquet deleted successfully"}
-
-
+ 
+ 
 @router.post("/bouquets/{bouquetId}/appendDocument")
 def appendDocument(
     bouquetId: int,
@@ -347,16 +337,19 @@ def appendDocument(
     db: Session = Depends(get_db),
 ):
     documentId = payload.get("documentId")
+ 
     if not documentId:
         raise HTTPException(400, "documentId is required")
+ 
     appendDocumentToBouquet(
         db=db,
         bouquetId=bouquetId,
         documentId=documentId,
     )
+ 
     return {"message": "Document appended to bouquet successfully"}
-
-
+ 
+ 
 @router.delete("/bouquets/{bouquetId}/removeDocument")
 def removeDocument(
     bouquetId: int,
@@ -364,11 +357,14 @@ def removeDocument(
     db: Session = Depends(get_db),
 ):
     documentId = payload.get("documentId")
+ 
     if not documentId:
         raise HTTPException(400, "documentId is required")
+ 
     removeDocumentFromBouquet(
         db=db,
         bouquetId=bouquetId,
         documentId=documentId,
     )
+ 
     return {"message": "Document removed from bouquet successfully"}

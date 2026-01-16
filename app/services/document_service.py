@@ -1,12 +1,11 @@
 import uuid
-import logging
 import shutil
 import os
 from typing import Dict
 from sqlalchemy.orm import Session
 from app.helpers import normalize_role
 from sqlalchemy import func
-from fastapi import HTTPException
+from fastapi import HTTPException, logger
 from datetime import datetime
 from app.db import SessionLocal
 from app.models import (
@@ -27,7 +26,6 @@ from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
 
 BASE_STORAGE_PATH = "storage"
-logger = logging.getLogger(__name__)
 MAX_UPLOAD_MB = 50
 CHUNK_BATCH_SIZE = 32
 
@@ -43,79 +41,150 @@ def normalize_role_name(r: str):
         return "Company Admin"
     return r.title()
 
+
+# Helper functions for workflow display
+def normalize_role_name(r: str):
+    if r == "EMPLOYEE":
+        return "Uploader"
+    if r == "DEPARTMENT_HEAD":
+        return "Department Head"
+    if r == "COMPANY_ADMIN":
+        return "Company Admin"
+    return r.title()
+
+
+# def compute_display_status(document, steps):
+#     status = document.status
+
+#     # Draft before submission
+#     if status == "DRAFT":
+#         return "DRAFT"
+
+#     # Submitted but not yet approved by 1st assignee
+#     if status == "SUBMITTED":
+#         pending_step = next((s for s in steps if s.status == "PENDING"), None)
+#         if pending_step:
+#             return f"Pending on {normalize_role_name(pending_step.approver_type)}"
+#         return "Submitted"
+
+#     # Rejected case
+#     if status == "REJECTED":
+#         rejected_step = next((s for s in steps if s.status == "REJECTED"), None)
+#         if rejected_step:
+#             return f"Rejected by {normalize_role_name(rejected_step.approver_type)}"
+#         return "Rejected"
+
+#     # Under review — mid workflow
+#     if status in ("UNDER_REVIEW",):
+#         pending_step = next((s for s in steps if s.status == "PENDING"), None)
+#         if pending_step:
+#             return f"Pending on {normalize_role_name(pending_step.approver_type)}"
+#         return "Under Review1"
+
+#     if status in ("REUPLOADED"):
+#          pending_step = next((s for s in steps if s.status == "PENDING"), None)
+#          print(pending_step)
+#          if pending_step:
+#             return f"Pending on {normalize_role_name(pending_step.approver_type)}"
+#          return "Under Review2"
+
+#     # Approved final
+#     if status == "APPROVED":
+#         return "Approved"
+
+#     # Fallback
+#     return status
+
+
 def compute_display_status(workflow, steps):
-    # If workflow missing (legacy or bad data)
+
+    # If workflow missing 
     if not workflow:
         return "DRAFT"
-    wf_status = workflow.workflow_status # version-level lifecycle
-    # === REJECTED VERSION ===
+
+    wf_status = workflow.workflow_status  # version-level lifecycle
+
+    # REJECTED VERSION 
     if wf_status == "REJECTED":
         rejected_step = next((s for s in steps if s.status == "REJECTED"), None)
         if rejected_step:
             return f"Rejected by {normalize_role_name(rejected_step.approver_type)}"
         return "Rejected"
-    # === APPROVED VERSION ===
+
+    # APPROVED VERSION 
     if wf_status == "COMPLETED":
         return "Approved"
-    # === IN PROGRESS → Display pending chain ===
+
+    # IN PROGRESS → Display pending chain 
     pending_step = next((s for s in steps if s.status == "PENDING"), None)
     if pending_step:
         return f"Pending on {normalize_role_name(pending_step.approver_type)}"
+
     return "Pending"
 
-# =======================================================
+
 # Document AI Processing
-# =======================================================
 def processDocument(
     *,
-    document_id: int,
+    filePath: str,
+    documentId: int,
+    versionId: int,  # REQUIRED for version-based AI
     filename: str,
     fileType: str,
     fileSizeMb: float,
-    filePath: str = None,
-    versionId: int = None,  # Optional for legacy
+
 ) -> Dict:
-    if not isinstance(document_id, int):
-        raise TypeError(f"document_id must be int, got {type(document_id)} → {document_id}")
+
+    if not isinstance(documentId, int):
+        raise TypeError(
+            f"documentId must be int, got {type(documentId)} → {documentId}"
+        )
 
     db: Session = SessionLocal()
     ocrUsed = False
     chunksCreated = 0
 
     try:
-        # 1. Get the correct version
-        if versionId:
-            version = db.query(DocumentVersion).filter(
-                DocumentVersion.document_id == document_id,
-                DocumentVersion.id == versionId
-            ).first()
-        else:
-            version = db.query(DocumentVersion).filter(
-                DocumentVersion.document_id == document_id
-            ).order_by(DocumentVersion.version_number.desc()).first()
+        # Always create chat session per version
+        session = ChatSession()
+        db.add(session)
+        db.flush()
 
-        if not version or not version.file_path:
-            raise FileNotFoundError(f"No valid version/file found for document_id={document_id}")
+        # ---------- AIDOCUMENT LOOKUP ----------
+        aiDocument = (
+            db.query(AIDocument)
+            .filter(
+                AIDocument.document_id == documentId,
+                AIDocument.version_id == versionId,
+            )
+            .first()
+        )
 
-        storedFilePath = filePath or version.file_path
+        # ---------- FALLBACK FOR LEGACY (versionId missing in old docs) ----------
+        if not aiDocument and versionId == 1:
+            aiDocument = (
+                db.query(AIDocument)
+                .filter(
+                    AIDocument.document_id == documentId,
+                    AIDocument.version_id.is_(None),
+                )
+                .first()
+            )
 
-        if not os.path.exists(storedFilePath):
-            raise FileNotFoundError(f"Stored document file missing: {storedFilePath}")
+            # Heal legacy: attach version id
+            if aiDocument:
+                aiDocument.version_id = versionId
+                db.commit()
 
-        # 2. Get or create AIDocument
-        aiDocument = db.query(AIDocument).filter(
-            AIDocument.document_id == document_id,
-            AIDocument.version_id == version.id
-        ).first()
-
+        # ---------- CREATE IF NOT FOUND ----------
         if not aiDocument:
             session = ChatSession()
             db.add(session)
             db.flush()
 
             aiDocument = AIDocument(
-                document_id=document_id,
-                version_id=version.id,
+                document_id=documentId,
+                version_id=versionId,
                 session_id=session.session_id,
                 filename=filename,
                 file_type=fileType,
@@ -123,25 +192,12 @@ def processDocument(
             )
             db.add(aiDocument)
             db.commit()
+        else:
+            # Reuse the same session
+            session.session_id = aiDocument.session_id
 
-        # 3. IMPORTANT FIX: Check if chunks already exist for this AI document
-        existing_count = db.query(func.count(DocumentChunk.id)).filter(
-            DocumentChunk.ai_document_id == aiDocument.id
-        ).scalar()
-
-        if existing_count > 0:
-            logger.info(f"Skipping chunking: {existing_count} chunks already exist for ai_document_id={aiDocument.id}")
-            return {
-                "status": "already_processed",
-                "document_id": document_id,
-                "chunks": existing_count,
-                "ocr_used": False,
-                "message": "Document already processed — skipping chunk creation"
-            }
-
-        # 4. Only chunk if nothing exists
-        lastChunkIndex = 0
-        for pageNumber, rawText, usedOcr in iterateFilePages(storedFilePath):
+        # ---------- CHUNKING & OCR ----------
+        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
             if not rawText or not rawText.strip():
                 continue
 
@@ -162,7 +218,7 @@ def processDocument(
 
         return {
             "status": "success",
-            "document_id": document_id,
+            "document_id": documentId,
             "chunks": chunksCreated,
             "ocr_used": ocrUsed,
             "file_size_mb": round(fileSizeMb, 2),
@@ -176,6 +232,7 @@ def processDocument(
     finally:
         db.close()
 
+# Draft + Metadata Save
 def saveDocument(
     db: Session,
     *,
@@ -202,10 +259,6 @@ def saveDocument(
     )
     if not version:
         raise HTTPException(500, "No version found")
-    if payload.summary is not None:
-        version.summary = payload.summary
-    if payload.tags is not None:
-        version.tags = payload.tags
     ai_document = (
         db.query(AIDocument).filter(AIDocument.document_id == document.id).first()
     )
@@ -233,13 +286,7 @@ def saveDocument(
         )
         db.add(version_summary)
 
-    # From first: add review
-    review = DocumentReview(
-        document_id=document.id,
-        reviewed_by=None,
-        status="PENDING",
-    )
-    db.add(review)
+    db.commit()
 
     db.commit()
     return {
@@ -251,9 +298,7 @@ def saveDocument(
         "status": document.status,
     }
 
-# =======================================================
 # Draft Create
-# =======================================================
 def createDocumentDraft(
     db: Session,
     *,
@@ -290,10 +335,13 @@ def createDocumentDraft(
         str(document.id),
     )
     os.makedirs(docDir, exist_ok=True)
+
     # Move uploaded file into permanent storage
     permanentPath = os.path.join(docDir, f"v1_{originalFilename}")
     shutil.move(tempFilePath, permanentPath)
+
     sizeBytes = os.path.getsize(permanentPath)
+
     # Create Version 1
     version = DocumentVersion(
         document_id=document.id,
@@ -302,26 +350,29 @@ def createDocumentDraft(
         file_name=originalFilename,
         file_size_bytes=sizeBytes,
         created_by=currentUser["user_id"],
-        summary=None, # per version summary support
-        tags=[], # per version tags support
+        summary=None,  # per version summary support
+        tags=[],  # per version tags support
     )
     db.add(version)
+
     # Update document pointer
     document.current_version = 1
+
     # Reduce company space
     company.remaining_space -= sizeBytes
+
     db.commit()
-    # In document_service.py → createDocumentDraft
+
+    # Output includes version_id for AI
     return {
         "document_id": document.id,
         "version_id": version.id,
         "version_number": 1,
-        "file_path": permanentPath, 
+        "file_path": permanentPath,
     }
 
-# =======================================================
 # FULL DETAILS + Visibility + Workflow
-# =======================================================
+
 def get_document_full_details(
     db: Session,
     *,
@@ -329,7 +380,7 @@ def get_document_full_details(
     version: int | None = None,
     current_user: dict,
 ):
-    # 1. Select version
+    # Select version
     if version is not None:
         version_obj = (
             db.query(DocumentVersion)
@@ -348,7 +399,8 @@ def get_document_full_details(
             .order_by(DocumentVersion.version_number.desc())
             .first()
         )
-    # 2. Validate document
+
+    # Validate document
     document = (
         db.query(Document)
         .filter(
@@ -360,7 +412,8 @@ def get_document_full_details(
     )
     if not document:
         raise HTTPException(404, "Document not found")
-    # 3. Fetch approval steps for same version
+
+    # Fetch approval steps for same version
     steps = (
         db.query(DocumentApprovalStep)
         .filter(
@@ -370,13 +423,16 @@ def get_document_full_details(
         .order_by(DocumentApprovalStep.step_order)
         .all()
     )
-    # 4. Viewer context (actionable for approver)
+
+    # Viewer context (actionable for approver)
     viewer_id = current_user["user_id"]
     viewer_step = next((s for s in steps if s.assigned_to == viewer_id), None)
-    is_actionable = viewer_step and viewer_step.status == "PENDING"
-    # 5. Rejected remarks (if any)
+    is_actionable = viewer_step and viewer_step.status != "PENDING"
+
+    # Rejected remarks (if any)
     rejected_step = next((s for s in steps if s.status == "REJECTED"), None)
     remarks = rejected_step.remarks if rejected_step else None
+
     workflow = (
         db.query(DocumentWorkflowRun)
         .filter(
@@ -385,8 +441,13 @@ def get_document_full_details(
         )
         .first()
     )
+
     display_status = compute_display_status(workflow, steps)
-    # 7. Fetch AI summary per version
+
+    # Compute final display status across workflow
+    # display_status = compute_display_status(document, steps)
+
+    # Fetch AI summary per version
     ai_document = (
         db.query(AIDocument)
         .filter(
@@ -414,13 +475,7 @@ def get_document_full_details(
         )
         .first()
     )
-    # 8. Latest review (optional)
-    review = (
-        db.query(DocumentReview)
-        .filter(DocumentReview.document_id == document.id)
-        .order_by(DocumentReview.created_at.desc())
-        .first()
-    )
+
     versions = (
         db.query(DocumentVersion.version_number, DocumentVersion.created_at)
         .filter(DocumentVersion.document_id == document.id)
@@ -466,9 +521,9 @@ def get_document_full_details(
         "versions": [{"version": v[0], "created_at": v[1]} for v in versions],
     }
 
-# =======================================================
+
 # Approve Step
-# =======================================================
+
 def approve_document_step(
     db: Session,
     *,
@@ -503,10 +558,13 @@ def approve_document_step(
     )
     if not current_step:
         raise HTTPException(400, "No pending approval step")
+
     if current_step.assigned_to != user_id:
         raise HTTPException(403, "Not authorized to approve this step")
+
     current_step.status = "APPROVED"
     current_step.action_at = datetime.utcnow()
+
     next_step = (
         db.query(DocumentApprovalStep)
         .filter(
@@ -534,18 +592,24 @@ def approve_document_step(
     if workflow:
         workflow.workflow_status = "COMPLETED"
         workflow.public_at = datetime.utcnow()
+
     version.visibility = "COMPANY"
     version.public_at = datetime.utcnow()
+
     document.status = "APPROVED"
-    document.current_version = version.version_number # <--- Important
+    document.current_version = version.version_number  # <--- Important
     document.current_assignee_id = None
     document.current_step_order = None
+
     db.commit()
     return {"message": "Final approval completed. Document is now public."}
+
 
 # =======================================================
 # Reject Step
 # =======================================================
+
+
 def reject_document_step(
     db: Session,
     *,
@@ -580,12 +644,16 @@ def reject_document_step(
     )
     if not current_step:
         raise HTTPException(400, "No pending step to reject")
+
     if current_step.assigned_to != user_id:
         raise HTTPException(403, "Not authorized to reject")
+
+    # mark step rejected
     current_step.status = "REJECTED"
     current_step.action_at = datetime.utcnow()
     current_step.remarks = remarks or None
-    print("remarks service-----",remarks)
+
+    # workflow state
     workflow = (
         db.query(DocumentWorkflowRun)
         .filter(
@@ -594,30 +662,146 @@ def reject_document_step(
         )
         .first()
     )
-    workflow.workflow_status = "REJECTED"
-    workflow.rejected_by = user_id
-    workflow.rejected_at = datetime.utcnow()
+    if workflow:
+        workflow.workflow_status = "REJECTED"
+        workflow.rejected_by = user_id
+        workflow.rejected_at = datetime.utcnow()
+
     # optional per-version reject info
     version.rejected_remarks = remarks
     version.rejected_at = datetime.utcnow()
     version.status = "REJECTED"
+
+    # document-level state
     document.status = "REJECTED"
+    document.current_version = version.version_number  # <--- Important
     document.current_assignee_id = document.uploaded_by
     document.current_step_order = None
+
     db.commit()
+
     return {"message": "Document rejected and returned to uploader."}
+
 
 # =======================================================
 # Reupload Version
 # =======================================================
+# def reupload_document_version(
+#     db: Session,
+#     *,
+#     document_id: int,
+#     file_path: str,
+#     file_name: str,
+#     created_by: int,
+# ):
+#     # 1. Get last version
+#     last_version = (
+#         db.query(DocumentVersion)
+#         .filter(DocumentVersion.document_id == document_id)
+#         .order_by(DocumentVersion.version_number.desc())
+#         .first()
+#     )
+
+#     new_version_number = last_version.version_number + 1
+
+#     # 2. Create new version
+#     new_version = DocumentVersion(
+#         document_id=document_id,
+#         version_number=new_version_number,
+#         file_path=file_path,
+#         file_name=file_name,
+#         file_size_bytes=os.path.getsize(file_path),
+#         created_by=created_by,
+#     )
+#     db.add(new_version)
+#     db.flush()
+
+#     # 3. Fetch previous workflow steps
+#     old_steps = (
+#         db.query(DocumentApprovalStep)
+#         .filter(
+#             DocumentApprovalStep.document_id == document_id,
+#             DocumentApprovalStep.version_id == last_version.id,
+#         )
+#         .order_by(DocumentApprovalStep.step_order)
+#         .all()
+#     )
+
+#     # ===== IMPORTANT CHANGE =====
+#     # Step 1 -> uploader self approved
+#     uploader_step = old_steps[0]
+#     db.add(
+#         DocumentApprovalStep(
+#             document_id=document_id,
+#             version_id=new_version.id,
+#             step_order=1,
+#             assigned_to=uploader_step.assigned_to,
+#             approver_type=uploader_step.approver_type,
+#             status="APPROVED",
+#             action_at=datetime.utcnow(),
+#         )
+#     )
+
+#     # Remaining hierarchy
+#     step_order = 2
+#     for step in old_steps[1:]:
+#         db.add(
+#             DocumentApprovalStep(
+#                 document_id=document_id,
+#                 version_id=new_version.id,
+#                 step_order=step_order,
+#                 assigned_to=step.assigned_to,
+#                 approver_type=step.approver_type,
+#                 status="PENDING" if step_order == 2 else "WAITING",
+#             )
+#         )
+#         step_order += 1
+
+#     # Create workflow run
+#     workflow = DocumentWorkflowRun(
+#         document_id=document_id,
+#         version_id=new_version.id,
+#         workflow_status="IN_PROGRESS",
+#     )
+#     db.add(workflow)
+
+#     # Update document state
+#     document = db.query(Document).filter(Document.id == document_id).first()
+
+#     # if no hierarchy beyond uploader => auto approve whole document
+#     if len(old_steps) == 1:
+#         document.status = "APPROVED"
+#         document.current_version = new_version_number
+#         document.current_assignee_id = None
+#         document.current_step_order = None
+#         db.commit()
+#         return {
+#             "message": "Document reuploaded and auto-approved.",
+#             "version": new_version_number,
+#             "file_path": file_path,
+#             "version_id": new_version.id,
+#         }
+
+#     # otherwise pending on next approver
+#     document.status = "REUPLOADED"  # matches SUBMITTED flow
+#     document.current_version = new_version_number
+#     document.current_step_order = 2
+#     document.current_assignee_id = old_steps[1].assigned_to
+
+#     db.commit()
+
+#     return {
+#         "message": "Document reuploaded and workflow restarted.",
+#         "version": new_version_number,
+#         "file_path": file_path,
+#         "version_id": new_version.id,
+#     }
+
+
 def reupload_document_version(
-    db: Session,
-    *,
-    document_id: int,
-    file_path: str,
-    file_name: str,
-    created_by: int,
+    db: Session, *, document_id: int, file_path: str, file_name: str, created_by: int
 ):
+    # 1. Fetch last version
     last_version = (
         db.query(DocumentVersion)
         .filter(DocumentVersion.document_id == document_id)
@@ -625,8 +809,13 @@ def reupload_document_version(
         .first()
     )
 
+    if not last_version:
+        raise HTTPException(500, "No base version found")
+
+    # 2. Assign new version number
     new_version_number = last_version.version_number + 1
 
+    # 3. Create version entry
     new_version = DocumentVersion(
         document_id=document_id,
         version_number=new_version_number,
@@ -638,6 +827,7 @@ def reupload_document_version(
     db.add(new_version)
     db.flush()
 
+    # 4. Get previous approval steps
     old_steps = (
         db.query(DocumentApprovalStep)
         .filter(
@@ -648,68 +838,171 @@ def reupload_document_version(
         .all()
     )
 
-    step_order = 1
+    if not old_steps:
+        raise HTTPException(500, "Approval hierarchy not found")
 
+    # ==== Step 1 → uploader auto approved ====
     uploader_step = old_steps[0]
     db.add(
         DocumentApprovalStep(
             document_id=document_id,
             version_id=new_version.id,
-            step_order=step_order,
+            step_order=1,
             assigned_to=uploader_step.assigned_to,
             approver_type=uploader_step.approver_type,
             status="APPROVED",
             action_at=datetime.utcnow(),
         )
     )
-    step_order += 1
 
-    for idx, step in enumerate(old_steps[1:], start=1):
+    # ==== Remaining hierarchy =====
+    order = 2
+    for s in old_steps[1:]:
         db.add(
             DocumentApprovalStep(
                 document_id=document_id,
                 version_id=new_version.id,
-                step_order=step_order,
-                assigned_to=step.assigned_to,
-                approver_type=step.approver_type,
-                status="PENDING" if idx == 1 else "WAITING",
+                step_order=order,
+                assigned_to=s.assigned_to,
+                approver_type=s.approver_type,
+                status="PENDING"
             )
         )
-        step_order += 1
+        order += 1
 
-    workflow = DocumentWorkflowRun(
-        document_id=document_id,
-        version_id=new_version.id,
-        workflow_status="IN_PROGRESS",
+    # ==== Create workflow for new version ====
+    db.add(
+        DocumentWorkflowRun(
+            document_id=document_id,
+            version_id=new_version.id,
+            workflow_status="IN_PROGRESS",
+        )
     )
-    db.add(workflow)
 
-    document = db.query(Document).filter(Document.id == document_id).first()
-    # if no hierarchy beyond uploader => auto approve whole document
+    # ==== Update Document Root ====
+    doc = db.query(Document).filter(Document.id == document_id).first()
+
+    # if only uploader in chain -> auto approve
     if len(old_steps) == 1:
-        document.status = "APPROVED"
-        document.current_version = new_version_number
-        document.current_assignee_id = None
-        document.current_step_order = None
+        doc.status = "APPROVED"
+        doc.current_version = new_version_number
+        doc.current_assignee_id = None
+        doc.current_step_order = None
         db.commit()
         return {
             "message": "Document reuploaded and auto-approved.",
             "version": new_version_number,
-            "file_path": file_path,
             "version_id": new_version.id,
         }
-    # otherwise pending on next approver
-    document.status = "REUPLOADED" # matches SUBMITTED flow
-    document.current_version = new_version_number
-    document.current_step_order = 2
-    document.current_assignee_id = old_steps[1].assigned_to
+
+    # Normal chain → now pending
+    doc.status = "REUPLOADED"
+    doc.current_version = new_version_number
+    doc.current_step_order = 2
+    doc.current_assignee_id = old_steps[1].assigned_to
+
     db.commit()
+
     return {
-        "message": "Document reuploaded and workflow restarted.",
+        "message": "Reuploaded successfully",
         "version": new_version_number,
-        "file_path": file_path,
         "version_id": new_version.id,
     }
+
+
+# def get_approver_inbox(
+#     db: Session,
+#     current_user: dict,
+#     search: str | None,
+#     status: str | None,
+#     page: int,
+#     pagelimit: int,
+# ):
+#     user_id = current_user["user_id"]
+#     offset = (page - 1) * pagelimit
+
+#     # Base query on DOCUMENT (not versions)
+#     base_query = (
+#         db.query(Document, User)
+#         .join(User, User.id == Document.uploaded_by)
+#         .filter(
+#             Document.is_delete.is_(False),
+#             Document.status.in_(["REJECTED", "REUPLOADED", "APPROVED", "SUBMITTED"]),
+#         )
+#     )
+
+#     total = base_query.count()
+
+#     rows = (
+#         base_query.order_by(Document.created_at.desc())
+#         .offset(offset)
+#         .limit(pagelimit)
+#         .all()
+#     )
+
+#     data = []
+
+#     for doc, uploader in rows:
+
+#         # ---- fetch first version for FILE NAME display ----
+#         first_version = (
+#             db.query(DocumentVersion)
+#             .filter(DocumentVersion.document_id == doc.id)
+#             .order_by(DocumentVersion.version_number.asc())
+#             .first()
+#         )
+
+#         # ---- fetch latest version workflow status for USER ----
+#         latest_version = (
+#             db.query(DocumentVersion)
+#             .filter(DocumentVersion.document_id == doc.id)
+#             .order_by(DocumentVersion.version_number.desc())
+#             .first()
+#         )
+
+#         # find step assigned to user in latest version
+#         my_step = (
+#             db.query(DocumentApprovalStep)
+#             .filter(
+#                 DocumentApprovalStep.document_id == doc.id,
+#                 DocumentApprovalStep.version_id == latest_version.id,
+#                 DocumentApprovalStep.assigned_to == user_id,
+#             )
+#             .first()
+#         )
+
+#         if not my_step:
+#             continue  # user not involved in latest version, skip
+
+#         viewer_status = my_step.status  # <-- SIMPLE STATUS
+
+#         if search:
+#             if first_version and search.lower() not in first_version.file_name.lower():
+#                 continue
+
+#         if status:
+#             if viewer_status != status.upper():
+#                 continue
+
+#         data.append(
+#             {
+#                 "document_id": doc.id,
+#                 "file_name": first_version.file_name if first_version else None,
+#                 "version_number": latest_version.version_number if latest_version else None,
+#                 "status": viewer_status,  # <-- EXACT SIMPLE STATUS
+#                 "uploaded_by": {"user_id": uploader.id, "name": uploader.name},
+#                 "submitted_at": doc.created_at,
+#             }
+#         )
+
+#     return {
+#         "statusCode": 200,
+#         "message": "Inbox fetched successfully",
+#         "page": page,
+#         "pagelimit": pagelimit,
+#         "total": total,
+#         "data": data,
+#     }
 
 def get_approver_inbox(
     db: Session,
@@ -721,7 +1014,8 @@ def get_approver_inbox(
 ):
     user_id = current_user["user_id"]
     offset = (page - 1) * pagelimit
-    # Base docs for this company (no status filter)
+
+    # fetch all documents for this company (no status restriction)
     docs = (
         db.query(Document, User)
         .join(User, User.id == Document.uploaded_by)
@@ -729,9 +1023,12 @@ def get_approver_inbox(
         .order_by(Document.created_at.desc())
         .all()
     )
+
     data = []
+
     for doc, uploader in docs:
-        # ---- v1 for file name ----
+
+        # -------- FIRST VERSION (identity filename) --------
         first_version = (
             db.query(DocumentVersion)
             .filter(DocumentVersion.document_id == doc.id)
@@ -740,7 +1037,8 @@ def get_approver_inbox(
         )
         if not first_version:
             continue
-        # ---- latest version for approval chain ----
+
+        # -------- LATEST VERSION (workflow version) --------
         latest_version = (
             db.query(DocumentVersion)
             .filter(DocumentVersion.document_id == doc.id)
@@ -749,44 +1047,63 @@ def get_approver_inbox(
         )
         if not latest_version:
             continue
-        # ---- find user's step in latest ----
-        my_step = (
+
+        # -------- FETCH ALL STEPS FOR LATEST VERSION --------
+        steps = (
             db.query(DocumentApprovalStep)
             .filter(
                 DocumentApprovalStep.document_id == doc.id,
                 DocumentApprovalStep.version_id == latest_version.id,
-                DocumentApprovalStep.assigned_to == user_id,
             )
-            .first()
+            .order_by(DocumentApprovalStep.step_order)
+            .all()
         )
+        if not steps:
+            continue
+
+        # -------- FIND MY STEP --------
+        my_step = next((s for s in steps if s.assigned_to == user_id), None)
         if not my_step:
-            continue # user not part of workflow
-        viewer_status = my_step.status # exact: PENDING/APPROVED/REJECTED
-        is_actionable = (my_step.status == "PENDING")
-        # ---- search filtering ----
+            continue   # user not in this workflow
+
+        # -------- SEQUENTIAL BLOCKING LOGIC --------
+        previous_steps = [s for s in steps if s.step_order < my_step.step_order]
+        blocked = any(s.status != "APPROVED" for s in previous_steps)
+
+        if blocked:
+            continue   # cannot view yet (example: company admin before dept head)
+
+        viewer_status = my_step.status   # exact PENDING/APPROVED/REJECTED
+
+        # -------- SEARCH FILTER --------
         if search:
-            search_pattern = f"%{search.lower()}%"
-            if not func.lower(first_version.file_name).like(search_pattern):
+            if search.lower() not in first_version.file_name.lower():
                 continue
-        # ---- status filter ----
+
+        # -------- STATUS FILTER --------
         if status:
             if viewer_status != status.upper():
                 continue
+
         data.append(
             {
                 "document_id": doc.id,
                 "file_name": first_version.file_name,
                 "version_number": latest_version.version_number,
-                "status": viewer_status, # EXACT
-                "is_actionable": is_actionable,
-                "is_approved": True if viewer_status == "APPROVED" else False,
-                "uploaded_by": {"user_id": uploader.id, "name": uploader.name},
+                "status": viewer_status,
+                "uploaded_by": {
+                    "user_id": uploader.id,
+                    "name": uploader.name,
+                },
                 "submitted_at": doc.created_at,
             }
         )
+
     total = len(data)
-    # --- pagination after filtering ---
-    paginated = data[offset : offset + pagelimit]
+
+    # -------- PAGINATION AFTER FILTERING --------
+    paginated = data[offset: offset + pagelimit]
+
     return {
         "statusCode": 200,
         "message": "Inbox fetched successfully",
@@ -796,12 +1113,16 @@ def get_approver_inbox(
         "data": paginated,
     }
 
+
+
 def compute_workflow_view(steps, viewer_id):
     """
     Converts raw approval steps into contextual display for given viewer.
     """
+
     view = []
     pending_step = next((s for s in steps if s.status == "PENDING"), None)
+
     for s in steps:
         if s.assigned_to == viewer_id:
             # Current user is the owner of this step
@@ -822,15 +1143,15 @@ def compute_workflow_view(steps, viewer_id):
             if s.status == "APPROVED":
                 display = f"Approved by {normalize_role_name(s.approver_type)}"
                 actionable = False
+
             elif s.status == "REJECTED":
                 display = f"Rejected by {normalize_role_name(s.approver_type)}"
                 actionable = False
+
             elif s.status == "PENDING":
                 display = f"Pending on {normalize_role_name(s.approver_type)}"
                 actionable = False
-            else: # WAITING state
-                display = "Waiting"
-                actionable = False
+
         view.append(
             {
                 "step_order": s.step_order,
@@ -841,4 +1162,5 @@ def compute_workflow_view(steps, viewer_id):
                 "actionable": actionable,
             }
         )
+
     return view

@@ -1,9 +1,17 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
-from sqlalchemy import or_, cast,func
+from sqlalchemy import or_, cast, func, and_
 from app.enum import UserRole, ROLE_ORDER
+from datetime import datetime
 from sqlalchemy.dialects.postgresql import TEXT
-from app.models import DocumentVersion, Document, User, Department, DocumentApprovalStep
+from app.models import (
+    DocumentVersion,
+    Document,
+    User,
+    Department,
+    DocumentApprovalStep,
+    DocumentWorkflowRun,
+)
 
 
 def get_documents_service(
@@ -16,49 +24,132 @@ def get_documents_service(
 ):
     offset = (page - 1) * size
 
-    query = (
-        db.query(Document, DocumentVersion)
-        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .filter(
-            Document.is_delete.is_(False),
-            Document.uploaded_by == current_user["user_id"],
-        )
+    # base: user's docs
+    query = db.query(Document).filter(
+        Document.is_delete.is_(False),
+        Document.uploaded_by == current_user["user_id"],
     )
 
     if status:
         query = query.filter(Document.status == status)
-    if search:
-        search_pattern = f"%{search.lower()}%"
-        query = query.filter(
-        or_(
-            func.lower(DocumentVersion.file_name).like(search_pattern),
-            func.lower(cast(DocumentVersion.tags, TEXT)).like(search_pattern),
-        )
-    )
-
 
     total = query.count()
 
-    results = (
+    documents = (
         query.order_by(Document.created_at.desc()).offset(offset).limit(size).all()
     )
 
     data = []
-    for doc, version in results:
+
+    for doc in documents:
+        first_version = (
+            db.query(DocumentVersion)
+            .filter(DocumentVersion.document_id == doc.id)
+            .order_by(DocumentVersion.version_number.asc())
+            .first()
+        )
+
+        latest_version = (
+            db.query(DocumentVersion)
+            .filter(DocumentVersion.document_id == doc.id)
+            .order_by(DocumentVersion.version_number.desc())
+            .first()
+        )
+
+        if not latest_version:
+            continue
+
+        if search:
+            s = search.lower()
+            if first_version and s not in first_version.file_name.lower():
+                continue
+        steps = (
+            db.query(DocumentApprovalStep)
+            .filter(
+                DocumentApprovalStep.document_id == doc.id,
+                DocumentApprovalStep.version_id == latest_version.id,
+            )
+            .order_by(DocumentApprovalStep.step_order)
+            .all()
+        )
+
+        pending_on = None
+        pending_step = next((s for s in steps if s.status == "PENDING"), None)
+
+        if pending_step:
+            pending_on = pending_step.approver_type
+        else:
+            rejected = next((s for s in steps if s.status == "REJECTED"), None)
+            if rejected:
+                pending_on = f"Rejected by {rejected.approver_type}"
+            else:
+                if doc.status == "APPROVED":
+                    pending_on = "Approved"
+                elif doc.status == "REUPLOADED":
+                    pending_on = "Reuploaded"
+                else:
+                    pending_on = doc.status
         data.append(
             {
                 "document_id": doc.id,
                 "status": doc.status,
                 "current_version": doc.current_version,
+                "pending_on": pending_on,
                 "version": {
-                    "version_number": version.version_number,
-                    "file_name": version.file_name,
-                    "file_size_bytes": version.file_size_bytes,
-                    "tags": version.tags,
-                    "summary": version.summary,
+                    "version_number": latest_version.version_number,
+                    "file_name": (
+                        first_version.file_name
+                        if first_version
+                        else latest_version.file_name
+                    ),
+                    "file_size_bytes": latest_version.file_size_bytes,
+                    "tags": latest_version.tags,
+                    "summary": latest_version.summary,
                 },
             }
         )
+    # for doc in documents:
+
+    #     # ---------- FIRST VERSION (identity filename) ----------
+    #     first_version = (
+    #         db.query(DocumentVersion)
+    #         .filter(DocumentVersion.document_id == doc.id)
+    #         .order_by(DocumentVersion.version_number.asc())
+    #         .first()
+    #     )
+
+    #     # ---------- LATEST VERSION (current metadata) ----------
+    #     latest_version = (
+    #         db.query(DocumentVersion)
+    #         .filter(DocumentVersion.document_id == doc.id)
+    #         .order_by(DocumentVersion.version_number.desc())
+    #         .first()
+    #     )
+
+    #     if not latest_version:
+    #         continue
+
+    #     # ---------- SEARCH FILTER ----------
+    #     if search:
+    #         s = search.lower()
+    #         # check on first name (identity)
+    #         if first_version and s not in first_version.file_name.lower():
+    #             continue
+
+    #     data.append(
+    #         {
+    #             "document_id": doc.id,
+    #             "status": doc.status,
+    #             "current_version": doc.current_version,
+    #             "version": {
+    #                 "version_number": latest_version.version_number,
+    #                 "file_name": first_version.file_name if first_version else latest_version.file_name,
+    #                 "file_size_bytes": latest_version.file_size_bytes,
+    #                 "tags": latest_version.tags,
+    #                 "summary": latest_version.summary,
+    #             },
+    #         }
+    #     )
 
     return {
         "statusCode": 200,
@@ -70,21 +161,12 @@ def get_documents_service(
     }
 
 
-def get_user_hierarchy(db: Session, current_user: dict):
-    hierarchy = []
-
-    user = (
-        db.query(User)
-        .filter(User.id == current_user["user_id"], User.is_delete.is_(False))
-        .first()
-    )
-
-
 def get_assignable_users(db: Session, current_user: dict):
     company_id = current_user["company_id"]
     department_id = current_user["department_id"]
     user_id = current_user["user_id"]
-    role = current_user["role"]
+
+    role = UserRole(current_user["role"])  # normalize
 
     base_users = db.query(User).filter(
         User.company_id == company_id,
@@ -94,9 +176,20 @@ def get_assignable_users(db: Session, current_user: dict):
     )
 
     dept = None
-
     if role == UserRole.COMPANY_ADMIN:
-        users = base_users.all()
+        return {
+            "statusCode": 200,
+            "data": [
+                {
+                    "user_id": current_user["user_id"],
+                    "role": current_user["role"],
+                    "name": current_user["name"],
+                    "is_department_head": False,
+                    "order": ROLE_ORDER[UserRole.COMPANY_ADMIN],
+                    "self": True,
+                }
+            ],
+        }
 
     elif role == UserRole.DEPARTMENT_HEAD:
         users = base_users.filter(
@@ -125,23 +218,32 @@ def get_assignable_users(db: Session, current_user: dict):
                 User.role == UserRole.COMPANY_ADMIN,
             )
         ).all()
+    self_entry = {
+        "user_id": current_user["user_id"],
+        "name": current_user["name"],
+        "role": role,
+        "is_department_head": current_user.get("is_department_head", False),
+        "order": ROLE_ORDER[role],
+        "self": True,
+    }
 
-    data = []
+    data = [self_entry]
 
     for u in users:
         is_dept_head = dept is not None and u.id == dept.head_user_id
 
-        effective_role = (
-            UserRole.COMPANY_ADMIN
-            if u.role == UserRole.COMPANY_ADMIN
-            else UserRole.DEPARTMENT_HEAD if is_dept_head else UserRole.EMPLOYEE
-        )
+        if u.role == UserRole.COMPANY_ADMIN:
+            effective_role = UserRole.COMPANY_ADMIN
+        elif is_dept_head:
+            effective_role = UserRole.DEPARTMENT_HEAD
+        else:
+            effective_role = UserRole.EMPLOYEE
 
         data.append(
             {
                 "user_id": u.id,
                 "name": u.name,
-                "role": u.role,
+                "role": effective_role,
                 "is_department_head": is_dept_head,
                 "order": ROLE_ORDER[effective_role],
             }
@@ -159,6 +261,7 @@ def assign_document(
     assignee_ids: list[int],
     current_user: dict,
 ):
+
     document = (
         db.query(Document)
         .filter(
@@ -172,8 +275,62 @@ def assign_document(
     if not document:
         raise HTTPException(404, "Document not found")
 
-    if not assignee_ids:
-        raise HTTPException(400, "No assignees provided")
+    if document.status not in ("DRAFT", "REJECTED"):
+        raise HTTPException(400, "Document already submitted for approval")
+
+    version = (
+        db.query(DocumentVersion)
+        .filter(DocumentVersion.document_id == document_id)
+        .order_by(DocumentVersion.version_number.desc())
+        .first()
+    )
+
+    if not version:
+        raise HTTPException(500, "Document version missing")
+
+    if not assignee_ids or len(assignee_ids) == 0:
+        version.visibility = "COMPANY"
+        version.public_at = datetime.utcnow()
+        document.status = "APPROVED"
+        document.current_assignee_id = None
+        document.current_step_order = None
+
+        workflow = DocumentWorkflowRun(
+            document_id=document_id,
+            version_id=version.id,
+            workflow_status="COMPLETED",
+            public_at=datetime.utcnow(),
+        )
+        db.add(workflow)
+        db.commit()
+        return
+
+    workflow = DocumentWorkflowRun(
+        document_id=document_id, version_id=version.id, workflow_status="SUBMITTED"
+    )
+    db.add(workflow)
+    db.flush()
+
+    if current_user["role"] == "COMPANY_ADMIN":
+        effective_uploader_role = "COMPANY_ADMIN"
+    elif current_user.get("is_department_head", False):
+        effective_uploader_role = "DEPARTMENT_HEAD"
+    else:
+        effective_uploader_role = "EMPLOYEE"
+
+    step_order = 1
+    db.add(
+        DocumentApprovalStep(
+            document_id=document_id,
+            version_id=version.id,
+            step_order=step_order,
+            assigned_to=current_user["user_id"],
+            approver_type=effective_uploader_role,
+            status="APPROVED",
+            action_at=datetime.utcnow(),
+        )
+    )
+    step_order += 1
 
     users = (
         db.query(User)
@@ -191,25 +348,47 @@ def assign_document(
 
     user_map = {u.id: u for u in users}
 
-    db.query(DocumentApprovalStep).filter(
-        DocumentApprovalStep.document_id == document.id
-    ).delete(synchronize_session=False)
-
-    for idx, user_id in enumerate(assignee_ids, start=1):
+    for idx, user_id in enumerate(assignee_ids):
+        status = "PENDING"
         user = user_map[user_id]
+        is_dept_head = False
+        if hasattr(user, "is_department_head"):
+            is_dept_head = getattr(user, "is_department_head", False)
+
+        if not is_dept_head:
+            dept = (
+                db.query(Department)
+                .filter(
+                    Department.id == user.department_id,
+                    Department.head_user_id == user.id,
+                )
+                .first()
+            )
+            if dept:
+                is_dept_head = True
+
+        if user.role == "COMPANY_ADMIN":
+            effective_role = "COMPANY_ADMIN"
+        elif is_dept_head:
+            effective_role = "DEPARTMENT_HEAD"
+        else:
+            effective_role = "EMPLOYEE"
 
         db.add(
             DocumentApprovalStep(
                 document_id=document.id,
-                step_order=idx,
+                version_id=version.id,
+                step_order=step_order,
                 assigned_to=user.id,
-                approver_type=user.role,
-                status="PENDING",
+                approver_type=effective_role,
+                status=status,
             )
         )
+        step_order += 1
 
     document.status = "SUBMITTED"
-    document.current_step_order = 1
     document.current_assignee_id = assignee_ids[0]
-
+    document.current_step_order = 2
+    document.current_version = version.version_number
+    workflow.workflow_status = "IN_PROGRESS"
     db.commit()

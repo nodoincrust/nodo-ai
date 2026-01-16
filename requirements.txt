@@ -1,6 +1,6 @@
 pip install fastapi uvicorn pandas numpy
-pip install sqlalchemy psycopg2-binary
-python-jose passlib email-validator
+pip install sqlalchemy psycopg2-binary 
+pip install python-jose[cryptography] passlib email-validator
 
 pip install fastapi uvicorn sqlalchemy psycopg2-binary pgvector
 pip install pydantic python-multipart requests redis spacy

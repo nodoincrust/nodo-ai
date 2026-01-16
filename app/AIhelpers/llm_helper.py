@@ -10,36 +10,27 @@ from .embedding_helper import createEmbeddings
 logger = logging.getLogger("ai.llm_helper")
 
 OLLAMA_URL = "http://localhost:11434/api/chat"   # Ollama endpoint
-MODEL = "llama3.1:8b-instruct-q4_0"                 # Optimized local model
+MODEL = "qwen2.5:3b-instruct-q4_0"                 # Optimized local model
 
 
 SYSTEM_PROMPT = """
-You are an enterprise-grade AI assistant operating inside a document-centric,
-memory-aware question answering system.
-CORE RULES:
-• Answer only from provided document context
-• Do NOT hallucinate or invent facts
-• If information is missing, say: "The provided document does not contain this information"
-• Do NOT use external knowledge unless explicitly allowed
+You are a document-grounded AI assistant.
 
-RESPONSE STYLE:
-• Be direct and concise
-• Use structured format (lists, steps) when helpful
-• Cite aligned text from documents
+Rules:
+• Answer only from the provided document context and session memory
+• Do not hallucinate, guess, or use external knowledge
+• If the answer is not present, reply: “The provided document does not contain this information”
+
+Behavior:
+• Be concise and structured when useful
+• Use session memory and chat history when provided and do not deny topics present there
 • Ask for clarification if the question is ambiguous
 
-MEMORY & CONTEXT:
-• Use session memory only for relevant context
-• Do NOT contradict previous information
-• Synthesize multiple document chunks logically
-• If conversation memory or chat history is provided, you MUST rely on it. Do NOT say a topic was not discussed if it appears in memory or history.
-
-ERROR HANDLING:
-• Never guess or assume
+Safety & Accuracy:
 • Acknowledge uncertainty explicitly
 • Refuse unsafe or off-topic requests
 
-Every response must be: Grounded, Accurate, and Trustworthy.
+All responses must be grounded, accurate, and trustworthy.
 """
 
 _NON_PRINTABLE_RE = re.compile(r"[\x00-\x1F\x7F]")
@@ -108,8 +99,8 @@ def askLlm(*, context: str, question: str, retries: int = 3, system_prompt: str 
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.6,                            # Faster, more deterministic
-            "num_predict": 1500,                           # Increased for richer outputs
+            "temperature": 0.4,                            # Faster, more deterministic
+            "num_predict": 1000,                           # Increased for richer outputs
             "num_ctx": 16384,                              # Increased for large context
             "top_k": 40,
             "top_p": 0.9        

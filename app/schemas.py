@@ -244,3 +244,9 @@ class GetEmployee(BaseModel):
 
 class GetEmployeeList(BaseModel):
     search: Optional[str] = None
+    
+class GetApprovalDocumentList(BaseModel):
+    page: int = 1
+    pagelimit: int = 10
+    search:Optional[str]=None
+    status: Optional[str] = None

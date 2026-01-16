@@ -19,7 +19,7 @@ from app.services.background_tasks import submitMemoryUpdate
 
 logger = logging.getLogger("ai.chatHistoryService")
 
-TOP_K = 15               # number of chunks to retrieve
+TOP_K = 20               # number of chunks to retrieve
 MAX_CHAT_HISTORY = 15    # recent messages only
 
 def load_recent_chat_history(

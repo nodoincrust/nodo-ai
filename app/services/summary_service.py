@@ -1,13 +1,17 @@
+# summary_service.py (full function)
+
 import logging
 import json
 import re
-from typing import List
+from typing import List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from fastapi import HTTPException
 
 from app.db import SessionLocal
 from app.models import DocumentChunk, DocumentSummary, AIDocument
 from app.AIhelpers.llm_helper import askLlm, RAGHelper
-from .TagServices import select_top_chunks
+from .TagServices import select_top_chunks, generateTagsFromLLM, storeDocumentTags
 
 logger = logging.getLogger("ai.summaryService")
 
@@ -40,8 +44,7 @@ Make the summary more comprehensive and professional while staying faithful to t
 """
 
 TAG_GUIDANCE = """
-For tags, generate 5-10 concise tags (2-4 words each) that are *highly relevant* to the document's content.
-Tags MUST be directly derived from the document's main themes, topics, and entities.
+For tags, generate 5-8 concise tags (2-4 words each) that are *highly relevant* to the document's content.
 Examples of good, relevant tags:
 - "carbon footprint"
 - "environmental impact"
@@ -51,7 +54,7 @@ Examples of good, relevant tags:
 - "supplier emissions"
 """
 
-def safeJsonParse(raw: str) -> dict:
+def safeJsonParse(raw: str) -> Dict[str, Any]:
     if not raw:
         return {"summary": "", "tags": [], "citations": []}
 
@@ -88,13 +91,36 @@ def safeJsonParse(raw: str) -> dict:
     }
 
 
-def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
+def _fallback_keywords(text: str) -> List[str]:
+    stop_words = {"the", "and", "is", "in", "to", "of", "a", "for", "on", "with", "as", "by", "that", "this", "are", "was", "it", "be", "or", "from", "at", "an", "which"}
+    try:
+        words = re.findall(r'\b\w+\b', text.lower())
+        keywords = [w for w in words if w.isalpha() and w not in stop_words]
+        return list(set(keywords))[:10]
+    except Exception:
+        return []
+
+
+def summarizeDocument(documentId: int, version_id: int, force_refine: bool = False) -> Dict[str, Any]:
+    """
+    Generate or update summary, tags, and citations for a specific document version.
+    Fully version-aware: uses version_id to fetch/store everything correctly.
+    """
     db: Session = SessionLocal()
     try:
-        ai_doc = db.query(AIDocument).filter(AIDocument.document_id == documentId).first()
-        if not ai_doc:
-            return {"status": "processing", "message": "Document ingestion not completed"}
+        # 1. Get the AI document for this exact version
+        ai_doc = db.query(AIDocument).filter(
+            AIDocument.document_id == documentId,
+            AIDocument.version_id == version_id
+        ).first()
 
+        if not ai_doc:
+            return {
+                "status": "processing",
+                "message": f"AIDocument not ready for document {documentId}, version {version_id}"
+            }
+
+        # 2. Check for existing chunks
         chunks = (
             db.query(DocumentChunk)
             .filter(DocumentChunk.ai_document_id == ai_doc.id)
@@ -103,12 +129,13 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
         )
 
         if not chunks:
-            logger.info(f"No chunks found for document {documentId} — triggering chunk creation")
+            logger.info(f"No chunks found for document {documentId} version {version_id} — triggering chunk creation")
 
-            from app.services.document_service import processDocument  # late import to avoid circular
+            from app.services.document_service import processDocument  # late import
 
             process_result = processDocument(
                 document_id=documentId,
+                versionId=version_id,  # Use versionId param
                 filename=ai_doc.filename or "unknown",
                 fileType=ai_doc.file_type or "pdf",
                 fileSizeMb=ai_doc.file_size_mb or 0.0,
@@ -132,6 +159,7 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
             if not chunks:
                 return {"status": "error", "message": "Failed to create chunks after attempt"}
 
+        # 3. Limit context size for LLM
         if len(chunks) > SUMMARY_TOP_K:
             chunks = select_top_chunks(db, chunks, "key content for document summary and tags", top_k=SUMMARY_TOP_K)
 
@@ -144,17 +172,16 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
 
         document_context = "\n\n".join(context_parts)[:MAX_CONTEXT_CHARS]
 
-        existing = (
-            db.query(DocumentSummary)
-            .filter(DocumentSummary.ai_document_id == ai_doc.id)
-            .first()
-        )
+        # 4. Check existing summary for this version
+        existing = db.query(DocumentSummary).filter(
+            DocumentSummary.ai_document_id == ai_doc.id,
+            DocumentSummary.version_id == version_id
+        ).first()
 
-        #First summary generation
+        # 5. Prepare prompt
         system_prompt = BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE
 
-        # If we already have a summary and want to refine → use refinement prompt
-        is_refinement = force_refine or (existing and existing.summary_text and not force_refine == False)
+        is_refinement = force_refine or (existing and existing.summary_text)
 
         if is_refinement:
             system_prompt += "\n" + REFINEMENT_PROMPT
@@ -165,6 +192,7 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
             f"DOCUMENT EXCERPTS:\n{document_context}"
         )
 
+        # 6. Call LLM
         llm_result = askLlm(
             context=llm_context,
             question="Generate or refine the document summary with tags and citations.",
@@ -173,8 +201,9 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
         parsed = safeJsonParse(llm_result["data"]["answer"])
 
         if not parsed["summary"]:
-            return {"status": "error", "message": "Summary generation failed"}
+            return {"status": "error", "message": "Summary generation failed - no valid summary returned"}
 
+        # 7. Clean and limit tags
         tags = [
             t.title().strip()
             for t in parsed["tags"]
@@ -187,14 +216,12 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
 
         citations = parsed["citations"] or default_citations
 
-        #Optional RAG enrichment & refinement (only when needed)
-        
+        # 8. Optional RAG refinement (second pass)
         should_refine_with_rag = not is_refinement and (not existing or len(tags) < 5)
 
         if should_refine_with_rag:
             logger.info("Performing second-pass RAG refinement")
             rag = RAGHelper(db)
-            # Use the freshly generated summary as query — best signal we have
             retrieved = rag.query(parsed["summary"], top_k=4)
 
             if retrieved:
@@ -203,7 +230,6 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
                     for r in retrieved
                 ])
 
-                # Now do refinement pass
                 refinement_prompt = (
                     BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE + "\n" + REFINEMENT_PROMPT +
                     f"\n\nExamples from similar documents:\n{examples}\n\n"
@@ -223,31 +249,31 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
                     parsed["tags"] = refined_parsed["tags"]
                     parsed["citations"] = refined_parsed["citations"] or citations
 
-                    # Update tags with better
                     tags = [
                         t.title().strip()
                         for t in parsed["tags"]
                         if isinstance(t, str) and 2 <= len(t.strip()) <= 30
                     ][:10] or tags
 
-        # Save / Update
+        # 9. Save/Update summary per version
         if existing:
             existing.summary_text = parsed["summary"]
             existing.tags = tags
             existing.citations = citations
+            existing.updated_at = func.now()
         else:
             new_summary = DocumentSummary(
                 ai_document_id=ai_doc.id,
+                version_id=version_id,           # ← Stored per version!
                 summary_text=parsed["summary"],
                 tags=tags,
                 citations=citations,
             )
             db.add(new_summary)
-            existing = new_summary
 
         db.commit()
 
-        # Update embedding
+        # 10. Update vector embedding (for RAG search)
         rag = RAGHelper(db)
         rag.update_summary_embedding(ai_doc.id, parsed["summary"])
 
@@ -257,22 +283,14 @@ def summarizeDocument(documentId: int, force_refine: bool = False) -> dict:
             "summary": parsed["summary"],
             "tags": tags,
             "citations": citations,
-            "used_rag_refinement": should_refine_with_rag
+            "used_rag_refinement": should_refine_with_rag,
+            "version_id": version_id
         }
 
     except Exception as exc:
         logger.exception("Summary generation failed")
+        db.rollback()
         return {"status": "error", "message": str(exc)}
 
     finally:
         db.close()
-
-
-def _fallback_keywords(text: str) -> List[str]:
-    stop_words = {"the", "and", "is", "in", "to", "of", "a", "for", "on", "with", "as", "by", "that", "this", "are", "was", "it", "be", "or", "from", "at", "an", "which"}
-    try:
-        words = re.findall(r'\b\w+\b', text.lower())
-        keywords = [w for w in words if w.isalpha() and w not in stop_words]
-        return list(set(keywords))[:10]
-    except Exception:
-        return []

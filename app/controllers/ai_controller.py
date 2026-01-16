@@ -1,119 +1,28 @@
-import os
-import shutil
-import tempfile
+# ai_controller.py (full corrected file)
+
+from fastapi import APIRouter, Depends, HTTPException, Path
+from sqlalchemy.orm import Session
 from uuid import uuid4
 from threading import Thread
-
-from fastapi import (
-    APIRouter,
-    UploadFile,
-    File,
-    HTTPException,
-    BackgroundTasks,
-    Depends,
-)
-
-from app.db import SessionLocal
-from app.helpers import get_current_user, run_summary_job
-from app.services.document_service import processDocument, createDocumentDraft
-from app.services.chat_service import chatWithDocument, fetchFullChatHistorySafe
+from app.helpers import get_db, run_summary_job
+from app.models import Document, DocumentVersion
 from app.services.ai_DBservice import getOrCreateSessionForDocument
+from app.services.chat_service import chatWithDocument
 from jobs_store import jobs
 
-ASYNC_THRESHOLD_MB = 5.0
+router = APIRouter(prefix="/nodo/ai", tags=["AI Features"])
 
-router = APIRouter(prefix="/nodo/ai")
-
-
-@router.post("/upload")
-async def uploadDocument(
-    backgroundTasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    current_user=Depends(get_current_user),
-):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    db = SessionLocal()
-    tempPath = None
-
-    try:
-        _, extension = os.path.splitext(file.filename)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tempPath = tmp.name
-
-        if not os.path.exists(tempPath) or os.path.getsize(tempPath) == 0:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-        fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
-
-        documentId = createDocumentDraft(
-            db=db,
-            tempFilePath=tempPath,
-            originalFilename=file.filename,
-            departmentId=current_user["department_id"],
-            currentUser=current_user,
-        )
-
-        tempPath = None
-
-        if fileSizeMb >= ASYNC_THRESHOLD_MB:
-            backgroundTasks.add_task(
-                processDocument,
-                document_id=documentId,
-                filename=file.filename,
-                fileType=file.content_type,
-                fileSizeMb=fileSizeMb,
-            )
-
-            return {
-                "status": "processing",
-                "documentId": documentId,
-                "fileSizeMb": round(fileSizeMb, 2),
-            }
-
-        result = processDocument(
-            document_id=documentId,
-            filename=file.filename,
-            fileType=file.content_type,
-            fileSizeMb=fileSizeMb,
-        )
-
-        sessionId = getOrCreateSessionForDocument(documentId)
-
-        return {
-            "status": "success",
-            "documentId": documentId,
-            "sessionId": sessionId,
-            "chunks": result.get("chunks", 0),
-            "ocr_used": result.get("ocr_used", False),
-            "fileSizeMb": round(fileSizeMb, 2),
-        }
-
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    finally:
-        db.close()
-        if tempPath and os.path.exists(tempPath):
-            os.remove(tempPath)
 
 @router.get("/chat")
 def chatApi(*, document_id: int, query: str):
     if not document_id:
-        raise HTTPException(status_code=400, detail="document_id is required")  # Validates input
-
+        raise HTTPException(status_code=400, detail="document_id is required")
     session_id = getOrCreateSessionForDocument(document_id)
-
     result = chatWithDocument(
-        document_id=document_id,   
-        session_id=session_id,      
+        document_id=document_id,
+        session_id=session_id,
         query=query,
-    )                                                                     # Executes chat pipeline
-
+    )
     return {
         "document_id": document_id,
         "session_id": session_id,
@@ -121,45 +30,74 @@ def chatApi(*, document_id: int, query: str):
         "citations": result.get("citations", []),
     }
 
-@router.post("/summary/start/{document_id}")
-def start_summary(document_id: int):
+
+@router.post("/summary/start/{documentId}")
+def start_summary(
+    documentId: int = Path(..., description="Document ID to summarize"),
+    db: Session = Depends(get_db),
+):
+    """
+    Automatically starts summary for the **current/latest version** of the document.
+    No need for client to send version — fetches from document.current_version.
+    """
+    # 1. Get document to find current_version (number)
+    document = db.query(Document).filter(Document.id == documentId).first()
+    if not document:
+        raise HTTPException(404, f"Document {documentId} not found")
+
+    current_version_number = document.current_version
+    if not current_version_number:
+        raise HTTPException(404, f"No current version set for document {documentId}")
+
+    # 2. Get the actual DocumentVersion row
+    version = (
+        db.query(DocumentVersion)
+        .filter(
+            DocumentVersion.document_id == documentId,
+            DocumentVersion.version_number == current_version_number
+        )
+        .first()
+    )
+    if not version:
+        raise HTTPException(
+            404,
+            f"Version {current_version_number} not found for document {documentId}"
+        )
+
+    # 3. Use internal version ID for session & summary
+    version_id = version.id
+
+    # 4. Ensure session exists
+    getOrCreateSessionForDocument(documentId, version_id)
+
+    # 5. Start background job
     job_id = uuid4().hex
-    jobs[job_id] = {"status": "running", "result": None}
+    jobs[job_id] = {
+        "status": "running",
+        "result": None,
+        "document_id": documentId,
+        "version": current_version_number
+    }
 
-    getOrCreateSessionForDocument(document_id)
-
-    Thread(
+    thread = Thread(
         target=run_summary_job,
-        args=(job_id, document_id),
-        daemon=True,
-    ).start()
+        args=(job_id, documentId, version_id),
+        daemon=True
+    )
+    thread.start()
 
-    return {"job_id": job_id}
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "documentId": documentId,
+        "version": current_version_number,
+        "message": f"Summary generation started for current version {current_version_number}"
+    }
 
 
 @router.get("/summary/status/{job_id}")
-def get_summary_status(job_id: str):
+def get_status(job_id: str):
     job = jobs.get(job_id)
     if not job:
         return {"status": "not_found"}
     return {"job_id": job_id, **job}
-
-@router.get("/chat/history/{documentId}")
-def getChatHistory(documentId: int):
-
-    if not documentId or documentId <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid documentId"
-        )
-
-    result = fetchFullChatHistorySafe(documentId=documentId)
-
-    # If service itself failed
-    if result["status"] == "error":
-        raise HTTPException(
-            status_code=500,
-            detail=result["error"] or "Failed to fetch chat history"
-        )
-
-    return result

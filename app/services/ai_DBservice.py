@@ -14,25 +14,54 @@ from app.models import (
     SessionMessage,
     SessionMemorySummary,
 )
+# ai_DBservice.py (full corrected version)
 
-# this getorcreatesessionfordocument function fetches or creates a chat session for a given document
-def getOrCreateSessionForDocument(document_id: int) -> str:
+from typing import Optional
+import uuid
+from sqlalchemy.orm import Session
+from app.db import SessionLocal
+from app.models import AIDocument, ChatSession
+
+def getOrCreateSessionForDocument(
+    document_id: int,
+    version_id: Optional[int] = None  # ← Now supports version_id
+) -> str:
+    """
+    Get or create AI chat session for a document.
+    Supports version-specific sessions (recommended) or legacy (document-level).
+    """
     db: Session = SessionLocal()
     try:
-        ai_doc = (
-            db.query(AIDocument) #bridge between a Document and an AI Chat Session
-            .filter(AIDocument.document_id == document_id)
-            .first()
-        )
-        
+        # Prefer version-specific if provided
+        query = db.query(AIDocument).filter(AIDocument.document_id == document_id)
+        if version_id is not None:
+            query = query.filter(AIDocument.version_id == version_id)
+
+        ai_doc = query.first()
+
         if not ai_doc or not ai_doc.session_id:
-            raise RuntimeError("AI session not initialized for document")    
+            # Create new session
+            session = ChatSession()
+            db.add(session)
+            db.flush()
+
+            ai_doc = AIDocument(
+                document_id=document_id,
+                version_id=version_id,
+                session_id=session.session_id,
+            )
+            db.add(ai_doc)
+            db.commit()
 
         return str(ai_doc.session_id)
 
+    except Exception as e:
+        db.rollback()
+        raise RuntimeError(f"Failed to initialize AI session: {str(e)}")
+
     finally:
         db.close()
-
+        
 def storeDocumentChunk(
     db: Session,
     *,

@@ -23,6 +23,7 @@ from app.models import (
 from app.AIhelpers.chunk_helper import chunkText
 from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
+from app.helpers import build_tracking_timeline
 
 BASE_STORAGE_PATH = "storage"
 MAX_UPLOAD_MB = 50
@@ -209,7 +210,6 @@ def processDocument(
 
     except Exception:
         db.rollback()
-        logger.exception("Document ingestion failed")
         raise
 
     finally:
@@ -234,7 +234,7 @@ def saveDocument(
     if document.uploaded_by != currentUser["user_id"]:
         raise HTTPException(403, "Permission denied")
 
-    if document.status not in ("DRAFT", "REUPLOADED"):
+    if document.status not in ("DRAFT", "REUPLOADED","SUBMITTED",):
         raise HTTPException(400, "Only draft documents can be edited")
 
     version = (
@@ -264,7 +264,16 @@ def saveDocument(
     if version_summary:
         version_summary.summary_text = payload.summary or version_summary.summary_text
         version_summary.tags = payload.tags or version_summary.tags or []
-        version_summary.citations = []
+    
+    # handle citations safely
+        if hasattr(payload, "citations") and payload.citations is not None:
+            version_summary.citations = payload.citations
+        else:
+         version_summary.citations = version_summary.citations or []
+
+    # handle self-generated flag safely
+        if hasattr(payload, "is_self_generated") and payload.is_self_generated is not None:
+            version_summary.is_self_generated = payload.is_self_generated
     else:
         version_summary = DocumentSummary(
             ai_document_id=ai_document.id,
@@ -272,6 +281,8 @@ def saveDocument(
             summary_text=payload.summary or "",
             tags=payload.tags or [],
             citations=[],
+            is_self_generated=payload.is_self_generated if hasattr(payload, "is_self_generated") else False,
+
         )
         db.add(version_summary)
 
@@ -420,7 +431,7 @@ def get_document_full_details(
     # Viewer context (actionable for approver)
     viewer_id = current_user["user_id"]
     viewer_step = next((s for s in steps if s.assigned_to == viewer_id), None)
-    is_actionable = viewer_step and viewer_step.status == "PENDING"
+    is_actionable = viewer_step and viewer_step.status != "PENDING"
 
     # Rejected remarks (if any)
     rejected_step = next((s for s in steps if s.status == "REJECTED"), None)
@@ -477,6 +488,7 @@ def get_document_full_details(
         .order_by(DocumentVersion.version_number.asc())
         .all()
     )
+    timeline, timeline_status = build_tracking_timeline(steps)
 
     return {
         "document": {
@@ -513,8 +525,14 @@ def get_document_full_details(
             "text": summary_entry.summary_text if summary_entry else None,
             "tags": summary_entry.tags or [] if summary_entry else [],
             "citations": summary_entry.citations or [] if summary_entry else [],
+            "is_self_generated": summary_entry.is_self_generated if summary_entry else False,
         },
         "versions": [{"version": v[0], "created_at": v[1]} for v in versions],
+        
+        "tracking": {
+        "steps": timeline,
+        "final_status": timeline_status,
+    }
     }
 
 
@@ -529,7 +547,7 @@ def approve_document_step(
 ):
     document = (
         db.query(Document)
-        .filter(Document.id == document_id, Document.is_delete == False)
+        .filter(Document.id == document_id, Document.is_delete.is_(False))
         .first()
     )
     if not document:
@@ -619,7 +637,7 @@ def reject_document_step(
 ):
     document = (
         db.query(Document)
-        .filter(Document.id == document_id, Document.is_delete == False)
+        .filter(Document.id == document_id, Document.is_delete.is_(False))
         .first()
     )
     if not document:

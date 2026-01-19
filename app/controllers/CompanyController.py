@@ -24,7 +24,7 @@ from app.services.Companyservice import (
     delete_employee_details,
     get_employee_list,
     get_list_department,
-    get_all_employees,
+    get_all_employees,getDesignation
 )
 
 router = APIRouter(prefix="/nodo/company")
@@ -169,3 +169,8 @@ def get_list_employees(
 ):
     employee_manage_guard(current_user)
     return get_all_employees(db, current_user, query=payload.search)
+
+
+@router.get("/designations")
+def getDesignationList(db: Session = Depends(get_db)):
+    return getDesignation(db=db)

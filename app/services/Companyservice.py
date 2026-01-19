@@ -1,12 +1,12 @@
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 from sqlalchemy import or_, func
-from app.models import User, Department
+from app.models import User, Department,Designation
 from app.enum import UserRole
 from app.schemas import (
     CreateDepartmentSchema,
     UpdateDeptSchema,
-    UpdateEmployeeSchema,
+    UpdateEmployeeSchema
 )
 from app.helpers import get_employee_scoped
 
@@ -271,7 +271,6 @@ def delete_department_details(deptId: int, db: Session, current_user: dict):
         db.rollback()
         raise HTTPException(500, "Failed to delete department")
 
-
 def update_dept_details(
     deptId: int, payload: UpdateDeptSchema, db: Session, current_user: dict
 ):
@@ -288,38 +287,49 @@ def update_dept_details(
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
 
-    if payload.head_user_id is not None:
-        head_user = (
-            db.query(User)
-            .filter(
-                User.id == payload.head_user_id,
-                User.company_id == current_user["company_id"],
-                User.is_active.is_(True),
-                User.is_delete.is_(False),
+    # Handle department head logic
+    if "head_user_id" in payload.dict(exclude_unset=True):
+
+        # Case 1: Remove head (null)
+        if payload.head_user_id is None:
+            department.head_user_id = None
+
+        # Case 2: Assign new head
+        else:
+            head_user = (
+                db.query(User)
+                .filter(
+                    User.id == payload.head_user_id,
+                    User.company_id == current_user["company_id"],
+                    User.is_active == True,
+                    User.is_delete == False,
+                )
+                .first()
             )
-            .first()
-        )
 
-        if not head_user:
-            raise HTTPException(status_code=400, detail="Invalid department head user")
+            if not head_user:
+                raise HTTPException(status_code=400, detail="Invalid department head user")
 
-        department.head_user_id = payload.head_user_id
-        head_user.department_id = department.id
+            department.head_user_id = payload.head_user_id
+            head_user.department_id = department.id
 
+    # Update name
     if payload.name is not None:
         department.name = payload.name
 
+    # Update description
     if payload.description is not None:
         department.description = payload.description
 
+    # Update active status for dept + users
     if payload.is_active is not None:
         department.is_active = payload.is_active
-        
+
         db.query(User).filter(
-            User.department_id==department.id,
-            User.company_id==current_user["company_id"],
-            User.is_delete.is_(False)
-        ).update({"is_active":payload.is_active})
+            User.department_id == department.id,
+            User.company_id == current_user["company_id"],
+            User.is_delete == False
+        ).update({"is_active": payload.is_active})
 
     try:
         db.commit()
@@ -338,7 +348,6 @@ def update_dept_details(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update department")
-
 
 def add_employee_service(payload, db: Session, current_user: dict):
 
@@ -681,3 +690,20 @@ def get_all_employees(db: Session, current_user: dict, query: str | None = None)
             for e in employees
         ],
     }
+
+
+def getDesignation(db: Session):
+    
+    designation=db.query(Designation).order_by(Designation.name.asc()).all()
+    
+    roles = [d.name for d in designation]
+    
+    return {
+        "statusCode":200,
+        "message":"Desginations fetched successfully",
+        "data":{
+            "roles":roles
+        }
+    }
+    
+    

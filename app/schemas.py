@@ -140,7 +140,7 @@ class CreateDepartmentSchema(BaseModel):
 class UpdateDeptSchema(BaseModel):
     name: str | None = None
     description: str | None = None
-    head_user_id: int | None = None
+    head_user_id: Optional[int]=None
     is_active: bool
 
 
@@ -200,6 +200,7 @@ class SummaryResponse(BaseModel):
 class DocumentSaveSchema(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
+    is_self_generated:Optional[bool]=None
 
 
 class AskRequest(BaseModel):
@@ -250,3 +251,33 @@ class GetApprovalDocumentList(BaseModel):
     pagelimit: int = 10
     search:Optional[str]=None
     status: Optional[str] = None
+
+
+class createBouquetSchema(BaseModel):
+    name:str
+    description:str
+class BoqFilter(BaseModel):
+    search: Optional[str] = None
+    page: int = 1
+    pagelimit: int = 10
+    
+class DocFilter(BaseModel):
+    search: Optional[str] = None
+    page: int = 1
+    pagelimit: int = 10
+    
+class updateBouquet(BaseModel):
+    name:str
+    description:str
+
+class AppendDocumentsSchema(BaseModel):
+    documentIds: List[int]
+    
+class BoqDocsFilter(BaseModel):
+    search: Optional[str] = None
+    page: int = 1
+    pagelimit: int = 10
+    
+
+class RemoveDocumentsSchema(BaseModel):
+    documentIds: List[int]

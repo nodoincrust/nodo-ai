@@ -233,3 +233,65 @@ def normalize_role(step):
 
     # uploader
     return "Uploader"
+
+
+def build_tracking_timeline(steps, current_user=None):
+    timeline = []
+    rejected = False
+    final_status = "IN_PROGRESS"
+
+    # identify last role (highest approver)
+    approver_roles = [s.approver_type for s in steps]
+    last_role = approver_roles[-1] if approver_roles else None
+
+    for s in steps:
+        if s.status == "APPROVED":
+            timeline.append({
+                "role": s.approver_type,
+                "status": "APPROVED",
+                "display": f"Approved by {s.approver_type}",
+                "timestamp": s.action_at,
+            })
+
+        elif s.status == "PENDING":
+            # pending node should stop further tracking
+            timeline.append({
+                "role": s.approver_type,
+                "status": "PENDING",
+                "display": f"Pending on {s.approver_type}",
+                "timestamp": None,
+            })
+            final_status = "PENDING"
+            break
+
+        elif s.status == "REJECTED":
+            rejected = True
+            timeline.append({
+                "role": s.approver_type,
+                "status": "REJECTED",
+                "display": f"Rejected by {s.approver_type}",
+                "timestamp": s.action_at,
+            })
+            final_status = "REJECTED"
+            break
+
+    # ---- Only append FINAL when completed ----
+    if rejected:
+        timeline.append({
+            "role": "FINAL",
+            "status": "REJECTED",
+            "display": "Document Rejected",
+            "timestamp": None,
+        })
+
+    elif all(s.status == "APPROVED" for s in steps):
+        timeline.append({
+            "role": "FINAL",
+            "status": "APPROVED",
+            "display": "Document Approved",
+            "timestamp": None,
+        })
+        final_status = "APPROVED"
+
+    # NO FINAL if pending at highest role
+    return timeline, final_status

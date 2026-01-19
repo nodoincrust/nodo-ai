@@ -1,11 +1,30 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks,Form,Body
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    Depends,
+    HTTPException,
+    BackgroundTasks,
+    Form,
+    Body,
+)
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
 import os
 from app.models import Document
 from app.helpers import get_db, get_current_user
-from app.schemas import DocumentSaveSchema,GetApprovalDocumentList
+from app.schemas import (
+    DocumentSaveSchema,
+    GetApprovalDocumentList,
+    createBouquetSchema,
+    BoqFilter,
+    DocFilter,
+    updateBouquet,
+    AppendDocumentsSchema,
+    BoqDocsFilter,
+    RemoveDocumentsSchema,
+)
 from app.services.document_service import (
     processDocument,
     createDocumentDraft,
@@ -13,10 +32,19 @@ from app.services.document_service import (
     get_document_full_details,
     approve_document_step,
     reject_document_step,
-    reupload_document_version,get_approver_inbox,
+    reupload_document_version,
+    get_approver_inbox,
 )
-from app.services.bouquetService import(
-    createBouquet,getBouquetById,appendDocumentToBouquet,removeDocumentFromBouquet,deleteBouquet,getAllBoqList
+from app.services.bouquetService import (
+    createBouquet,
+    getBouquetById,
+    removeDocumentFromBouquet,
+    deleteBouquet,
+    getAllBoqList,
+    get_approved_documents_service,
+    update_boq_details,
+    append_documents_to_bouquet,
+    get_bouquet_documents_service,
 )
 
 router = APIRouter(prefix="/nodo/newdocuments")
@@ -31,7 +59,7 @@ def greet():
 async def uploadDocument(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    documentId: int | None = Form(None),   # <--- ADDED
+    documentId: int | None = Form(None),  # <--- ADDED
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
@@ -49,10 +77,11 @@ async def uploadDocument(
 
     # === REUPLOAD CASE ===
     if documentId:
-        document = db.query(Document).filter(
-            Document.id == documentId,
-            Document.is_delete.is_(False)
-        ).first()
+        document = (
+            db.query(Document)
+            .filter(Document.id == documentId, Document.is_delete.is_(False))
+            .first()
+        )
 
         if document and document.status == "REJECTED":
             newVersion = reupload_document_version(
@@ -79,7 +108,7 @@ async def uploadDocument(
                 "documentId": document.id,
                 "version": newVersion["version"],
                 "version_id": newVersion["version_id"],
-                "filepath": newVersion["file_path"]
+                "filepath": newVersion["file_path"],
             }
 
     # === NORMAL NEW DOCUMENT FLOW ===
@@ -173,12 +202,12 @@ def approve_document(
 @router.post("/reject/{document_id}")
 def reject_document(
     document_id: int,
-    payload:dict,
+    payload: dict,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     remarks = payload.get("reason") if payload else None
-    print("remarks-----------",remarks)
+    print("remarks-----------", remarks)
     result = reject_document_step(
         db=db,
         document_id=document_id,
@@ -249,123 +278,128 @@ async def reupload_document(
     }
 
 
-
 @router.post("/approver/inbox")
 def approver_inbox(
-    payload:GetApprovalDocumentList,
+    payload: GetApprovalDocumentList,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    print("asdfghjkl",payload.dict())
+    print("asdfghjkl", payload.dict())
     return get_approver_inbox(
         db=db,
         current_user=current_user,
         search=payload.search,
         status=payload.status,
         page=payload.page,
-        pagelimit=payload.pagelimit
+        pagelimit=payload.pagelimit,
     )
 
 
-
-@router.post("/bouquets")
+@router.post("/createBouquet")
 def createBouquetEndpoint(
-    payload: dict = Body(...),
+    payload: createBouquetSchema,
     db: Session = Depends(get_db),
-    currentUser: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
-    name = payload.get("name")
-    description = payload.get("description")
- 
-    if not name:
-        raise HTTPException(400, "name is required")
- 
-    bouquet = createBouquet(
+    return createBouquet(
         db=db,
-        name=name,
-        description=description,
-        createdBy=currentUser["user_id"],
+        name=payload.name,
+        description=payload.description,
+        current_user=current_user,
     )
- 
-    return {
-        "id": bouquet.id,
-        "message": "Bouquet created successfully",
-    }
- 
-@router.get("/getAllBoq")
-def getAllBoq( db: Session = Depends(get_db),currentUser: dict = Depends(get_current_user)):
-    
-    result= getAllBoqList(db=db,current_user=currentUser)
-    
-    if not result:
-        raise HTTPException("Boq not found")
-    else:
-        return result
-    
-    
+
+
+@router.post("/getAllBoq")
+def getAllBoq(
+    filters: BoqFilter,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return getAllBoqList(db=db, current_user=current_user, filters=filters)
+
+
+@router.post("/updateBouquet/{bouquetId}")
+def update_bouquet(
+    bouquetId: int,
+    payload: updateBouquet,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return update_boq_details(
+        db=db, current_user=current_user, payload=payload, bouquetId=bouquetId
+    )
+
+
 @router.get("/bouquets/{bouquetId}")
 def getBouquet(
     bouquetId: int,
     db: Session = Depends(get_db),
 ):
     result = getBouquetById(db, bouquetId)
- 
+
     if not result:
         raise HTTPException(404, "Bouquet not found")
- 
+
     return result
- 
- 
-@router.delete("/bouquets/{bouquetId}")
+
+
+@router.delete("/deleteBouquet/{bouquetId}")
 def deleteBouquetEndpoint(
     bouquetId: int,
     db: Session = Depends(get_db),
-    currentUser: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
-    deleteBouquet(
+    return deleteBouquet(
         db=db,
         bouquetId=bouquetId,
-        currentUserId=currentUser["user_id"],
+        current_user=current_user,
     )
-    return {"message": "Bouquet deleted successfully"}
- 
- 
-@router.post("/bouquets/{bouquetId}/appendDocument")
-def appendDocument(
+
+
+@router.post("/boqDocuments/{bouquetId}")
+def get_bouquet_documents(
     bouquetId: int,
-    payload: dict = Body(...),
+    filters: BoqDocsFilter,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return get_bouquet_documents_service(
+        db=db, current_user=current_user, bouquetId=bouquetId, filters=filters
+    )
+
+
+@router.post("/appendDocuments/{bouquetId}")
+def append_documents(
+    bouquetId: int,
+    payload: AppendDocumentsSchema,
     db: Session = Depends(get_db),
 ):
-    documentId = payload.get("documentId")
- 
-    if not documentId:
-        raise HTTPException(400, "documentId is required")
- 
-    appendDocumentToBouquet(
-        db=db,
-        bouquetId=bouquetId,
-        documentId=documentId,
+    return append_documents_to_bouquet(
+        db=db, bouquetId=bouquetId, documentIds=payload.documentIds
     )
- 
-    return {"message": "Document appended to bouquet successfully"}
- 
- 
-@router.delete("/bouquets/{bouquetId}/removeDocument")
-def removeDocument(
+
+
+@router.delete("/removeDocuments/{bouquetId}")
+def remove_documents(
     bouquetId: int,
-    payload: dict = Body(...),
+    payload: RemoveDocumentsSchema,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    documentId = payload.get("documentId")
- 
-    if not documentId:
-        raise HTTPException(400, "documentId is required")
- 
-    removeDocumentFromBouquet(
+    return removeDocumentFromBouquet(
         db=db,
+        current_user=current_user,
         bouquetId=bouquetId,
-        documentId=documentId,
+        document_id=payload.documentIds,
     )
- 
-    return {"message": "Document removed from bouquet successfully"}
- 
+
+
+@router.post("/getApprovedDocs")
+def get_approved_documents(
+    filters: DocFilter,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return get_approved_documents_service(
+        db=db, current_user=current_user, filters=filters
+    )

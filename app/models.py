@@ -285,6 +285,8 @@ class DocumentSummary(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     ai_document = relationship("AIDocument", back_populates="summaries")
+    is_self_generated=Column(Boolean,default=False)
+
 
 
 class SessionMessage(Base):
@@ -427,7 +429,7 @@ class Bouquet(Base):
  
     id = Column(BigInteger, primary_key=True, index=True)
  
-    name = Column(String, nullable=False)
+    name = Column(String, nullable=False,unique=True)
     description = Column(Text)
     documentsInBouquet = Column(
         "documents_in_bouquet",
@@ -441,3 +443,10 @@ class Bouquet(Base):
  
     createdBy = Column("created_by", Integer, nullable=False)
     updatedAt = Column("updated_at", DateTime)
+    
+
+class Designation(Base):
+    __tablename__="designation"
+    id = Column(BigInteger,primary_key=True,index=True)
+    name=Column(String,nullable=False)
+    

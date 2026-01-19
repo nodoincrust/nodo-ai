@@ -24,16 +24,13 @@ def _hash(text: str) -> str:
 def _cache_key(text: str) -> str:
     return f"emb:{_hash(text)}"
 
-#Batched Embeddings 
 def createEmbeddings(texts: List[str]) -> List[List[float]]:
-
     if not texts:
         return []
 
     results: List[List[float] | None] = [None] * len(texts)
     missing: List[Dict] = []
 
-    #Read cache in pipeline
     pipe = REDIS.pipeline()
     for t in texts:
         pipe.get(_cache_key(t))
@@ -46,15 +43,15 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
             missing.append({"index": i, "text": texts[i]})
 
     if not missing:
-        return results  # type: ignore
+        return results 
 
-    #Batch call to Ollama
-    for i in range(0, len(missing), MAX_BATCH_SIZE):
-        batch = missing[i : i + MAX_BATCH_SIZE]
+    for item in missing:
+        idx = item["index"]
+        text = item["text"]
 
         payload = {
             "model": EMBED_MODEL,
-            "input": [item["text"] for item in batch],
+            "prompt": text, 
         }
 
         try:
@@ -64,26 +61,27 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
                 timeout=EMBED_TIMEOUT,
             )
             response.raise_for_status()
-            vectors = response.json()["embeddings"]
+            data = response.json()
 
-        except Exception as exc:
-            logger.exception("Embedding batch failed: %s", str(exc))
-            vectors = [[0.0] * EMBED_DIM for _ in batch]
+            vector = data.get("embedding")
+            if not vector or len(vector) != EMBED_DIM:
+                raise ValueError("Invalid embedding returned")
 
-        for item, vector in zip(batch, vectors):
-            idx = item["index"]
-            text = item["text"]
+        except Exception:
+            logger.exception("Embedding failed for text")
+            vector = [0.0] * EMBED_DIM
 
-            results[idx] = vector
-            REDIS.setex(
-                _cache_key(text),
-                CACHE_TTL,
-                json.dumps(vector),
-            )
+        results[idx] = vector
+        REDIS.setex(
+            _cache_key(text),
+            CACHE_TTL,
+            json.dumps(vector),
+        )
 
-    return results
+        logger.info("Embedding sample: %s", vector[:5])
+
+    return results 
 
 
 def createEmbedding(text: str) -> List[float]:
-    """Single-text wrapper (still batched internally)"""
     return createEmbeddings([text])[0]

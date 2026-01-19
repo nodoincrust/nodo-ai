@@ -100,7 +100,7 @@ def _fallback_keywords(text: str) -> List[str]:
     except Exception:
         return []
 
-
+SUMMARY_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE
 def summarizeDocument(documentId: int, version: int, force_refine: bool = False) -> Dict[str, Any]:
     db: Session = SessionLocal()
     try:
@@ -210,7 +210,7 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
 
         logger.info(f"Existing summary found: {existing is not None}")
 
-        system_prompt = BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE
+        system_prompt = SUMMARY_SYSTEM_PROMPT
 
         is_refinement = force_refine or (existing and existing.summary_text)
 
@@ -221,7 +221,6 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
             logger.info("Running in INITIAL GENERATION mode")
 
         llm_context = (
-            f"{system_prompt}\n\n"
             f"PREVIOUS SUMMARY (if any):\n{existing.summary_text if existing else 'None'}\n\n"
             f"DOCUMENT EXCERPTS:\n{document_context}"
         )
@@ -231,6 +230,7 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
         llm_result = askLlm(
             context=llm_context,
             question="Generate or refine the document summary with tags and citations.",
+            system_prompt=system_prompt,
         )
 
         logger.info(f"LLM result status: {llm_result.get('status')}")
@@ -282,7 +282,7 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
                     ])
 
                     refinement_prompt = (
-                        BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE + "\n" + REFINEMENT_PROMPT +
+                        SUMMARY_SYSTEM_PROMPT + "\n" + REFINEMENT_PROMPT +
                         f"\n\nExamples from similar documents:\n{examples}\n\n"
                         f"PREVIOUS SUMMARY:\n{parsed['summary']}\n\n"
                         f"DOCUMENT EXCERPTS:\n{document_context}"
@@ -366,8 +366,8 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
             "refined": is_refinement or should_refine_with_rag,
             "summary": parsed["summary"],
             "tags": tags,
-            "citations": citations,
-            "used_rag_refinement": should_refine_with_rag,
+            # "citations": citations,
+            # "used_rag_refinement": should_refine_with_rag,
             "version_id": version_id
         }
 

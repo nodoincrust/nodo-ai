@@ -22,6 +22,16 @@ logger = logging.getLogger("ai.chatHistoryService")
 TOP_K = 20               # number of chunks to retrieve
 MAX_CHAT_HISTORY = 15    # recent messages only
 
+CHAT_SYSTEM_PROMPT = """
+You are a document-grounded AI assistant.
+
+Rules:
+- Answer ONLY using the provided document context
+- Do NOT output JSON
+- Be concise, factual, and helpful
+- If the information is not present in the document, say so clearly
+"""
+
 def load_recent_chat_history(
     db: Session,
     session_id: str,
@@ -124,7 +134,10 @@ def chatWithDocument(
             )
 
             if summary and summary.summary_text:
-                context_parts.append(summary.summary_text)
+                context_parts.append(
+                    "High-level document summary (may be incomplete):\n"
+                    + summary.summary_text
+                )
                 citations = summary.citations or []
             else:
                 context_parts.append(
@@ -152,9 +165,14 @@ def chatWithDocument(
         llm_result = askLlm(
             context=final_context,
             question=query,
+            system_prompt=CHAT_SYSTEM_PROMPT,
         )
 
-        answer = llm_result["data"]["answer"]
+        if llm_result.get("status") != "success":
+            logger.error("LLM failed: %s", llm_result)
+            answer = "I’m unable to answer that question based on the document right now."
+        else:
+            answer = llm_result["data"]["answer"]
 
         db.add(
             SessionMessage(

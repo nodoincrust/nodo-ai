@@ -4,7 +4,7 @@ from typing import Dict, List
 import time
 import logging
 from sqlalchemy.orm import Session
-from app.models import DocumentSummary
+from app.models import DocumentChunk, DocumentSummary
 from .embedding_helper import createEmbeddings 
 
 logger = logging.getLogger("ai.llm_helper")
@@ -12,25 +12,28 @@ logger = logging.getLogger("ai.llm_helper")
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:3b-instruct-q4_0"
 
-SYSTEM_PROMPT = """
-You are a document-grounded AI assistant.
+# SYSTEM_PROMPT = """
+# You are a document-grounded AI assistant.
 
-Rules:
-• Answer only from the provided document context and session memory
-• Do not hallucinate, guess, or use external knowledge
-• If the answer is not present, reply: "The provided document does not contain this information"
+# Rules:
+# - Answer ONLY using the provided document context
+# - Do not hallucinate or use external knowledge
+# - If information is missing, say so clearly
 
-Behavior:
-• Be concise and structured when useful
-• Use session memory and chat history when provided and do not deny topics present there
-• Ask for clarification if the question is ambiguous
+# When generating a summary:
+# - Provide a concise factual summary
+# - Generate 5–6 short tags (single words or short phrases)
+# - Tags must come from the document content
+# - Tags must be lowercase
+# - No duplicates
 
-Safety & Accuracy:
-• Acknowledge uncertainty explicitly
-• Refuse unsafe or off-topic requests
+# Respond in JSON format exactly like this:
+# {
+#   "summary": "...",
+#   "tags": ["tag1", "tag2", "tag3"]
+# }
+# """
 
-All responses must be grounded, accurate, and trustworthy.
-"""
 
 _NON_PRINTABLE_RE = re.compile(r"[\x00-\x1F\x7F]")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.\?\!])\s+")
@@ -93,13 +96,21 @@ def optimizeContext(context: str, maxSentences: int = 50) -> str:
     return "\n".join(filtered)
 
 
-def askLlm(*, context: str, question: str, retries: int = 3, system_prompt: str = SYSTEM_PROMPT) -> Dict[str, Dict[str, str]]:
+def askLlm(
+    *,
+    context: str,
+    question: str,
+    system_prompt: str,
+    retries: int = 3,
+) -> Dict[str, Dict[str, str]]:
     """
-    Call the LLM with optimized context and question.
-    Returns: {"status": "success"/"error", "data": {"answer": "..."}}
+    Generic LLM caller.
+    Caller MUST explicitly pass system_prompt.
     """
-    logger.info(f"askLlm called - context length: {len(context)}, question: {question[:100]}...")
-    
+    logger.info(
+        f"askLlm called - context length: {len(context)}, question: {question[:100]}..."
+    )
+
     optimizedContext = optimizeContext(context)
     logger.info(f"Optimized context length: {len(optimizedContext)}")
 
@@ -111,113 +122,85 @@ def askLlm(*, context: str, question: str, retries: int = 3, system_prompt: str 
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.4,
-            "num_predict": 1000,
+            "temperature": 0.6,
+            "num_predict": 700,
             "num_ctx": 16384,
             "top_k": 40,
-            "top_p": 0.9        
+            "top_p": 0.9,
         },
         "stream": False,
     }
 
-    logger.info(f"Sending request to Ollama at {OLLAMA_URL}")
-
     for attempt in range(retries):
         try:
-            logger.info(f"Attempt {attempt + 1}/{retries}")
-            
             response = requests.post(
                 OLLAMA_URL,
                 json=payload,
                 timeout=140,
             )
-            
-            logger.info(f"Response status code: {response.status_code}")
             response.raise_for_status()
 
             response_json = response.json()
-            logger.info(f"Response received from LLM")
-            
             answer = response_json.get("message", {}).get("content", "")
-            logger.info(f"LLM answer length: {len(answer)}")
 
             return {
                 "status": "success",
-                "data": {
-                    "answer": answer
-                },
+                "data": {"answer": answer},
             }
-            
-        except requests.exceptions.ConnectionError as conn_err:
-            logger.error(f"Connection error to Ollama: {conn_err}")
-            if attempt == retries - 1:
-                return {
-                    "status": "error",
-                    "data": {
-                        "answer": f"Cannot connect to Ollama at {OLLAMA_URL}. Is Ollama running?"
-                    },
-                }
-            time.sleep(2 ** attempt)
-            
-        except requests.exceptions.Timeout as timeout_err:
-            logger.error(f"Timeout calling Ollama: {timeout_err}")
-            if attempt == retries - 1:
-                return {
-                    "status": "error",
-                    "data": {
-                        "answer": "Request to LLM timed out"
-                    },
-                }
-            time.sleep(2 ** attempt)
-            
+
         except Exception as exc:
-            logger.exception(f"LLM call failed on attempt {attempt + 1}")
+            logger.exception(f"LLM call failed (attempt {attempt + 1})")
             if attempt == retries - 1:
                 return {
                     "status": "error",
-                    "data": {
-                        "answer": str(exc)
-                    },
+                    "data": {"answer": str(exc)},
                 }
             time.sleep(2 ** attempt)
 
 
 class RAGHelper:
-    """Helper class for RAG (Retrieval Augmented Generation)"""
-    
     def __init__(self, db: Session):
         self.db = db
 
-    def query(self, text: str, top_k: int = 3, min_similarity: float = 0.7) -> List[Dict[str, any]]:
-        """
-        Query similar documents using embeddings
-        Returns list of similar document summaries
-        """
-        try:
-            logger.info(f"RAG query for text: {text[:100]}...")
-            embedding = createEmbeddings([text])[0]
-            
-            # Use pgvector cosine distance operator '<->' (smaller distance = more similar)
-            results = (
-                self.db.query(DocumentSummary)
-                .order_by(DocumentSummary.embedding.op('<->')(embedding))
-                .limit(top_k)
-                .all()
-            )
-            
-            logger.info(f"RAG found {len(results)} similar documents")
-            
-            return [
-                {
-                    'id': r.ai_document_id, 
-                    'summary': r.summary_text, 
-                    'tags': r.tags or []
-                } 
-                for r in results
-            ]
-        except Exception as e:
-            logger.error(f"RAG query failed: {e}")
-            return []
+    def query(
+        self,
+        text: str,
+        top_k: int = 5,
+        min_similarity: float | None = None,
+        session_id=None,
+        ai_document_id=None,
+    ):
+
+        logger.info("RAG query for: %s", text[:100])
+
+        query_embedding = createEmbeddings(text)
+
+        q = self.db.query(DocumentChunk)
+
+        if ai_document_id:
+            q = q.filter(DocumentChunk.ai_document_id == ai_document_id)
+
+        if session_id:
+            q = q.filter(DocumentChunk.session_id == session_id)
+
+        q = q.filter(DocumentChunk.embedding.isnot(None))
+
+        results = (
+            q.order_by(DocumentChunk.embedding.op("<->")(query_embedding))
+            .limit(top_k)
+            .all()
+        )
+
+        logger.info("RAG returned %d chunks", len(results))
+
+        return [
+            {
+                "chunk_id": c.id,
+                "text": c.chunk_text,
+                "page_number": c.page_number,
+            }
+            for c in results
+        ]
 
     def update_summary_embedding(self, ai_document_id: int, summary: str):
         """
@@ -227,7 +210,7 @@ class RAGHelper:
             logger.info(f"Updating embedding for ai_document_id={ai_document_id}")
             embedding = createEmbeddings([summary])[0]
             
-            summary_record = self.db.query(DocumentSummary).filter_by(
+            summary_record = self.db.query(DocumentChunk).filter_by(
                 ai_document_id=ai_document_id
             ).first()
             

@@ -65,7 +65,7 @@ def get_current_user(
 
     user_id = payload.get("user_id")
     company_id = payload.get("company_id")
-    name=payload.get("name")
+    name = payload.get("name")
     role = payload.get("role")
     department_id = payload.get("department_id")
 
@@ -91,7 +91,7 @@ def get_current_user(
         "user_id": user_id,
         "company_id": company_id,
         "role": role,
-        "name":name,
+        "name": name,
         "department_id": department.id if department else None,
         "is_department_head": is_department_head,
     }
@@ -207,17 +207,13 @@ def get_hierarchy_order(user: User, is_department_head: bool) -> int:
         return 2
     return 1
 
-def run_summary_job(job_id: str, documentId: int,version:int):
+
+def run_summary_job(job_id: str, documentId: int, version: int):
     try:
-        result = summarizeDocument(documentId,version)
+        result = summarizeDocument(documentId, version)
         jobs[job_id] = {"status": "done", "result": result}
     except Exception as e:
         jobs[job_id] = {"status": "error", "error": str(e)}
-
-
-
-
-
 
 
 def normalize_role(step):
@@ -235,63 +231,97 @@ def normalize_role(step):
     return "Uploader"
 
 
-def build_tracking_timeline(steps, current_user=None):
+def build_tracking_timeline(steps, document_status):
     timeline = []
-    rejected = False
-    final_status = "IN_PROGRESS"
 
-    # identify last role (highest approver)
-    approver_roles = [s.approver_type for s in steps]
-    last_role = approver_roles[-1] if approver_roles else None
+    # === CASE: NO STEPS ===
+    if not steps:
+        if document_status == "DRAFT":
+            timeline.append(
+                {
+                    "role": "UPLOADER",
+                    "status": "DRAFT",
+                    "display": "In Draft Mode",
+                    "timestamp": None,
+                }
+            )
+            return timeline, "DRAFT"
+
+        if document_status == "APPROVED":
+            timeline.append(
+                {
+                    "role": "EMPLOYEE",
+                    "status": "APPROVED",
+                    "display": "Self Approved",
+                    "timestamp": None,
+                }
+            )
+            return timeline, "APPROVED"
+
+        # fallback
+        timeline.append(
+            {
+                "role": "UNKNOWN",
+                "status": document_status,
+                "display": document_status.title(),
+                "timestamp": None,
+            }
+        )
+        return timeline, document_status
+
+    rejected = False
+    pending_found = False
 
     for s in steps:
+
+        # use full step for normalize_role
+        role = normalize_role(s)
+
         if s.status == "APPROVED":
-            timeline.append({
-                "role": s.approver_type,
-                "status": "APPROVED",
-                "display": f"Approved by {s.approver_type}",
-                "timestamp": s.action_at,
-            })
+            timeline.append(
+                {
+                    "role": role,
+                    "status": "APPROVED",
+                    "display": f"Approved by {role}",
+                    "timestamp": s.action_at,
+                }
+            )
 
         elif s.status == "PENDING":
-            # pending node should stop further tracking
-            timeline.append({
-                "role": s.approver_type,
-                "status": "PENDING",
-                "display": f"Pending on {s.approver_type}",
-                "timestamp": None,
-            })
-            final_status = "PENDING"
+            pending_found = True
+            timeline.append(
+                {
+                    "role": role,
+                    "status": "PENDING",
+                    "display": f"Pending on {role}",
+                    "timestamp": None,
+                }
+            )
             break
 
         elif s.status == "REJECTED":
             rejected = True
-            timeline.append({
-                "role": s.approver_type,
-                "status": "REJECTED",
-                "display": f"Rejected by {s.approver_type}",
-                "timestamp": s.action_at,
-            })
-            final_status = "REJECTED"
+            timeline.append(
+                {
+                    "role": role,
+                    "status": "REJECTED",
+                    "display": f"Rejected by {role}",
+                    "timestamp": s.action_at,
+                }
+            )
             break
 
-    # ---- Only append FINAL when completed ----
+    # === FINAL STAGE DECISION ===
     if rejected:
-        timeline.append({
-            "role": "FINAL",
-            "status": "REJECTED",
-            "display": "Document Rejected",
-            "timestamp": None,
-        })
+        return timeline, "REJECTED"
 
-    elif all(s.status == "APPROVED" for s in steps):
-        timeline.append({
-            "role": "FINAL",
-            "status": "APPROVED",
-            "display": "Document Approved",
-            "timestamp": None,
-        })
-        final_status = "APPROVED"
+    # all approved?
+    if all(s.status == "APPROVED" for s in steps):
+        return timeline, "APPROVED"
 
-    # NO FINAL if pending at highest role
-    return timeline, final_status
+    if pending_found:
+        return timeline, "PENDING"
+
+    return timeline, "IN_PROGRESS"
+
+

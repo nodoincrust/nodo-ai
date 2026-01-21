@@ -151,7 +151,7 @@ def append_documents_to_bouquet(
 
 
 def removeDocumentFromBouquet(
-    db: Session, current_user: dict, bouquetId: int, document_id: list[int]
+    db: Session, current_user: dict, bouquetId: int, document_id: int
 ):
 
     if not document_id:
@@ -171,30 +171,27 @@ def removeDocumentFromBouquet(
         raise HTTPException(status_code=404, detail="Bouquet not found")
 
     existing_docs = bouquet.documentsInBouquet or []
-    existing_ids = {d["documentId"] for d in existing_docs}
 
-    to_remove = []
-    not_found = []
-
-    for docId in document_id:
-        if docId in existing_ids:
-            to_remove.append(docId)
-        else:
-            not_found.append(docId)
-    if not to_remove:
+    # Check existence
+    exists = any(d["documentId"] == document_id for d in existing_docs)
+    if not exists:
         raise HTTPException(
-            status_code=404, detail=f"Document(s) not found in bouquet:{not_found}"
+            status_code=404, detail=f"Document {document_id} not found in bouquet"
         )
+
+    # Remove
     bouquet.documentsInBouquet = [
-        d for d in existing_docs if d["documentId"] not in to_remove
+        d for d in existing_docs if d["documentId"] != document_id
     ]
+
     flag_modified(bouquet, "documentsInBouquet")
     bouquet.updatedAt = datetime.utcnow()
     db.commit()
+
     return {
         "statusCode": 200,
-        "message": "Document(s) removed from bouquet successfully",
-        "removed": to_remove,
+        "message": "Document removed from bouquet successfully",
+        "removed": document_id,
     }
 
 
@@ -357,7 +354,6 @@ def get_approved_documents_service(db: Session, current_user: dict, filters: Doc
         query = query.filter(
             or_(
                 DocumentVersion.file_name.ilike(s),
-                Document.title.ilike(s),  # OPTIONAL: Add if exists
             )
         )
 
@@ -371,6 +367,21 @@ def get_approved_documents_service(db: Session, current_user: dict, filters: Doc
         .limit(filters.pagelimit)
         .all()
     )
+    selected_ids=set()
+    if filters.bouquetId:
+        bouquet=(
+            db.query(Bouquet)
+            .filter(
+                Bouquet.id==filters.bouquetId,
+                Bouquet.createdBy==current_user["user_id"],
+                Bouquet.isDelete.is_(False)
+            )
+            .first()
+        )
+        
+        if bouquet and bouquet.documentsInBouquet:
+            selected_ids={d["documentId"] for d in bouquet.documentsInBouquet}
+
 
     data = []
 
@@ -394,7 +405,6 @@ def get_approved_documents_service(db: Session, current_user: dict, filters: Doc
             .filter(DocumentSummary.version_id == latest_version.id)
             .first()
         )
-
         data.append(
             {
                 "document_id": doc.id,
@@ -407,9 +417,10 @@ def get_approved_documents_service(db: Session, current_user: dict, filters: Doc
                 "tags": summary_row.tags if summary_row else [],
                 "summary": summary_row.summary_text if summary_row else None,
                 "uploaded_by": doc.uploaded_by,
+                "is_selected_doc":doc.id in selected_ids
             }
         )
-
+    
     return {
         "statusCode": 200,
         "message": (

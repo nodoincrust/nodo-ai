@@ -13,7 +13,6 @@ from sqlalchemy import (
     CheckConstraint,
     UniqueConstraint,
     JSON,
-    
 )
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.dialects.postgresql import JSONB
@@ -204,7 +203,7 @@ class AIDocument(Base):
     document_id = Column(
         BigInteger, ForeignKey("documents.id"), nullable=False, index=True
     )
-    version_id=Column(BigInteger,nullable=True)
+    version_id = Column(BigInteger, nullable=True)
 
     session_id = Column(
         PG_UUID(as_uuid=True),
@@ -226,7 +225,9 @@ class AIDocument(Base):
         cascade="all, delete-orphan",
     )
 
-    summaries = relationship("DocumentSummary", back_populates="ai_document", lazy="dynamic")
+    summaries = relationship(
+        "DocumentSummary", back_populates="ai_document", lazy="dynamic"
+    )
 
 
 class DocumentChunk(Base):
@@ -262,6 +263,8 @@ class DocumentChunk(Base):
             name="uq_ai_document_chunk_index",
         ),
     )
+
+
 class DocumentSummary(Base):
     __tablename__ = "document_summaries"
 
@@ -285,8 +288,7 @@ class DocumentSummary(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     ai_document = relationship("AIDocument", back_populates="summaries")
-    is_self_generated=Column(Boolean,default=False)
-
+    is_self_generated = Column(Boolean, default=False)
 
 
 class SessionMessage(Base):
@@ -423,13 +425,12 @@ class DocumentWorkflowRun(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-
 class Bouquet(Base):
     __tablename__ = "bouquets"
- 
+
     id = Column(BigInteger, primary_key=True, index=True)
- 
-    name = Column(String, nullable=False,unique=True)
+
+    name = Column(String, nullable=False, unique=True)
     description = Column(Text)
     documentsInBouquet = Column(
         "documents_in_bouquet",
@@ -437,16 +438,15 @@ class Bouquet(Base):
         nullable=False,
         default=list,
     )
- 
+
     isActive = Column("is_active", Boolean, default=True)
     isDelete = Column("is_delete", Boolean, default=False)
- 
+
     createdBy = Column("created_by", Integer, nullable=False)
     updatedAt = Column("updated_at", DateTime)
-    
+
 
 class Designation(Base):
-    __tablename__="designation"
-    id = Column(BigInteger,primary_key=True,index=True)
-    name=Column(String,nullable=False)
-    
+    __tablename__ = "designation"
+    id = Column(BigInteger, primary_key=True, index=True)
+    name = Column(String, nullable=False)

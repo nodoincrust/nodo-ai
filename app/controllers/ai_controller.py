@@ -1,120 +1,29 @@
-import shutil
-import os
-import tempfile
-from app.helpers import get_db
-from fastapi import (
-    APIRouter,
-    UploadFile,
-    File,
-    HTTPException,
-    BackgroundTasks,
-    Form,
-    Query,
-    Depends,
-)
+# app/controllers/ai_controller.py
+
+from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy.orm import Session
-
-from app.db import SessionLocal
-from app.helpers import get_current_user,run_summary_job
-from app.models import Document,DocumentVersion
-from app.services.document_service import processDocument, createDocumentDraft
-from app.services.chat_service import chatWithDocument
-from app.services.summary_service import summarizeDocument
-from app.services.ai_DBservice import getOrCreateSessionForDocument
-
-
-from fastapi.concurrency import run_in_threadpool
 from uuid import uuid4
 from threading import Thread
+import logging
 
+from app.helpers import get_db, run_summary_job
+from app.models import Document, DocumentVersion, AIDocument
+from app.services.ai_DBservice import (
+    getOrCreateSessionForDocument,
+    createAIDocumentForVersion,
+    createChunksForExistingAIDocument,
+)
+from app.services.chat_service import chatWithDocument
 from jobs_store import jobs
 
-ASYNC_THRESHOLD_MB = 2.0
+router = APIRouter(prefix="/nodo/ai", tags=["AI Features"])
+logger = logging.getLogger("ai.controller")
 
-router = APIRouter(prefix="/nodo/ai")
-
-
-@router.post("/upload")
-async def uploadDocument(
-    backgroundTasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    current_user=Depends(get_current_user),
-):
-    print(current_user)
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    _, extension = os.path.splitext(file.filename)
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tempPath = tmp.name
-
-    if not os.path.exists(tempPath) or os.path.getsize(tempPath) == 0:
-        os.remove(tempPath)
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-    fileSizeMb = os.path.getsize(tempPath) / (1024 * 1024)
-
-    db = SessionLocal()
-    try:
-        businessDocumentId = createDocumentDraft(
-            db=db,
-            tempFilePath=tempPath,
-            originalFilename=file.filename,
-            departmentId=current_user.get("department_id"),
-            currentUser=current_user,
-        )
-
-        if fileSizeMb >= ASYNC_THRESHOLD_MB:
-            backgroundTasks.add_task(
-                processDocument,
-                filePath=tempPath,
-                documentId=businessDocumentId,
-                filename=file.filename,
-                fileType=file.content_type,
-                fileSizeMb=fileSizeMb,
-            )
-
-            return {
-                "status": "processing",
-                "documentId": businessDocumentId,
-                "fileSizeMb": round(fileSizeMb, 2),
-            }
-
-        result = processDocument(
-            filePath=tempPath,
-            documentId=businessDocumentId,
-            filename=file.filename,
-            fileType=file.content_type,
-            fileSizeMb=fileSizeMb,
-        )
-        sessionId = getOrCreateSessionForDocument(businessDocumentId)
-
-        return {
-            "status": "success",
-            "documentId": businessDocumentId,
-            "sessionId": sessionId,
-            "chunks": result.get("chunks", 0),
-            "ocrUsed": result.get("ocr_used", False),
-            "fileSizeMb": round(fileSizeMb, 2),
-        }
-
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    finally:
-        db.close()
-        try:
-            os.remove(tempPath)
-        except Exception:
-            pass
 
 @router.get("/chat")
 def chatApi(*, document_id: int, query: str):
     if not document_id:
-        raise HTTPException(status_code=400, detail="document_id is required")  # Validates input
+        raise HTTPException(400, "document_id is required")
 
     session_id = getOrCreateSessionForDocument(document_id)
 
@@ -122,7 +31,7 @@ def chatApi(*, document_id: int, query: str):
         document_id=document_id,
         session_id=session_id,
         query=query,
-    )                                                                     # Executes chat pipeline
+    )
 
     return {
         "document_id": document_id,
@@ -130,28 +39,100 @@ def chatApi(*, document_id: int, query: str):
         "answer": result["answer"],
         "citations": result.get("citations", []),
     }
- 
- 
 
-# @router.get("/summary/{documentId}")
-# def summarizeApi(documentId: int):
-
-#     getOrCreateSessionForDocument(documentId)
-
-#     return summarizeDocument(documentId)
 
 @router.post("/summary/start/{documentId}")
-def start_summary(documentId: int,version: int = Query(...)):
+def start_summary(
+    documentId: int = Path(..., description="Document ID to summarize"),
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == documentId).first()
+    if not document:
+        raise HTTPException(404, "Document not found")
+
+    if not document.current_version:
+        raise HTTPException(404, "No active version")
+
+    version = (
+        db.query(DocumentVersion)
+        .filter(
+            DocumentVersion.document_id == documentId,
+            DocumentVersion.version_number == document.current_version,
+        )
+        .first()
+    )
+    if not version:
+        raise HTTPException(404, "Version not found")
+
+    version_id = version.id
+
+    try:
+        session_id = getOrCreateSessionForDocument(documentId, version_id)
+    except RuntimeError as e:
+        if "Document must be ingested first" in str(e):
+            # Create AIDocument and session
+            session_id = createAIDocumentForVersion(
+                document_id=documentId,
+                version_id=version_id,
+                filename=version.file_name,
+                file_type=(
+                    version.file_name.split(".")[-1]
+                    if "." in version.file_name
+                    else "pdf"
+                ),
+                file_size_mb=(
+                    version.file_size_bytes / (1024 * 1024)
+                    if version.file_size_bytes
+                    else 0.0
+                ),
+            )
+
+            # Create chunks
+            chunk_result = createChunksForExistingAIDocument(
+                documentId=documentId,
+                versionId=version_id,
+                filePath=version.file_path,
+                filename=version.file_name,
+                fileType=(
+                    version.file_name.split(".")[-1]
+                    if "." in version.file_name
+                    else "pdf"
+                ),
+                fileSizeMb=(
+                    version.file_size_bytes / (1024 * 1024)
+                    if version.file_size_bytes
+                    else 0.0
+                ),
+            )
+
+            if chunk_result.get("status") != "success":
+                raise HTTPException(
+                    500, f"Failed to process document: {chunk_result.get('message')}"
+                )
+        else:
+            raise
+
     job_id = uuid4().hex
-    jobs[job_id] = {"status": "running", "result": None}
+    jobs[job_id] = {
+        "status": "running",
+        "session_id": session_id,
+        "document_id": documentId,
+        "version": document.current_version,
+        "result": None,
+    }
 
-    # ensure session exists
-    getOrCreateSessionForDocument(documentId,version)
+    Thread(
+        target=run_summary_job,
+        args=(job_id, documentId, version_id),
+        daemon=True,
+    ).start()
 
-    thread = Thread(target=run_summary_job, args=(job_id, documentId,version), daemon=True)
-    thread.start()
-
-    return {"job_id": job_id}
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "documentId": documentId,
+        "version": document.current_version,
+    }
 
 
 @router.get("/summary/status/{job_id}")
@@ -159,8 +140,4 @@ def get_status(job_id: str):
     job = jobs.get(job_id)
     if not job:
         return {"status": "not_found"}
-    
-    return {
-        "job_id": job_id,
-        **job
-    }
+    return {"job_id": job_id, **job}

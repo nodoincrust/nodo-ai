@@ -1,13 +1,9 @@
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 from sqlalchemy import or_, func
-from app.models import User, Department,Designation
+from app.models import User, Department, Designation
 from app.enum import UserRole
-from app.schemas import (
-    CreateDepartmentSchema,
-    UpdateDeptSchema,
-    UpdateEmployeeSchema
-)
+from app.schemas import CreateDepartmentSchema, UpdateDeptSchema, UpdateEmployeeSchema
 from app.helpers import get_employee_scoped
 
 
@@ -224,6 +220,7 @@ def updateStatusDept(deptId: int, is_active: bool, db: Session, current_user: di
             status_code=500, detail="Failed to update department status"
         )
 
+
 def delete_department_details(deptId: int, db: Session, current_user: dict):
 
     department = (
@@ -254,7 +251,7 @@ def delete_department_details(deptId: int, db: Session, current_user: dict):
             {
                 "is_delete": True,
                 "is_active": False,
-                "department_id": None  # optional - break reference
+                "department_id": None,  # optional - break reference
             }
         )
 
@@ -270,6 +267,7 @@ def delete_department_details(deptId: int, db: Session, current_user: dict):
     except Exception:
         db.rollback()
         raise HTTPException(500, "Failed to delete department")
+
 
 def update_dept_details(
     deptId: int, payload: UpdateDeptSchema, db: Session, current_user: dict
@@ -308,7 +306,9 @@ def update_dept_details(
             )
 
             if not head_user:
-                raise HTTPException(status_code=400, detail="Invalid department head user")
+                raise HTTPException(
+                    status_code=400, detail="Invalid department head user"
+                )
 
             department.head_user_id = payload.head_user_id
             head_user.department_id = department.id
@@ -328,7 +328,7 @@ def update_dept_details(
         db.query(User).filter(
             User.department_id == department.id,
             User.company_id == current_user["company_id"],
-            User.is_delete == False
+            User.is_delete == False,
         ).update({"is_active": payload.is_active})
 
     try:
@@ -348,6 +348,7 @@ def update_dept_details(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update department")
+
 
 def add_employee_service(payload, db: Session, current_user: dict):
 
@@ -578,23 +579,23 @@ def get_employee_list(
     offset = (page - 1) * size
 
     base_query = (
-    db.query(
-        User.id,
-        User.name,
-        User.email,
-        User.is_active,
-        User.department_id,
-        User.designation,
-        Department.name.label("department_name"),
+        db.query(
+            User.id,
+            User.name,
+            User.email,
+            User.is_active,
+            User.department_id,
+            User.designation,
+            Department.name.label("department_name"),
+        )
+        .outerjoin(Department, Department.id == User.department_id)
+        .filter(
+            User.company_id == current_user["company_id"],
+            User.is_delete.is_(False),
+            User.role == UserRole.EMPLOYEE,
+            User.id != current_user["user_id"],
+        )
     )
-    .outerjoin(Department, Department.id == User.department_id)
-    .filter(
-        User.company_id == current_user["company_id"],
-        User.is_delete.is_(False),
-        User.role == UserRole.EMPLOYEE,
-        User.id != current_user["user_id"],
-    )
-)
 
     if current_user.get("is_department_head"):
         base_query = base_query.filter(
@@ -693,17 +694,13 @@ def get_all_employees(db: Session, current_user: dict, query: str | None = None)
 
 
 def getDesignation(db: Session):
-    
-    designation=db.query(Designation).order_by(Designation.name.asc()).all()
-    
+
+    designation = db.query(Designation).order_by(Designation.name.asc()).all()
+
     roles = [d.name for d in designation]
-    
+
     return {
-        "statusCode":200,
-        "message":"Desginations fetched successfully",
-        "data":{
-            "roles":roles
-        }
+        "statusCode": 200,
+        "message": "Desginations fetched successfully",
+        "data": {"roles": roles},
     }
-    
-    

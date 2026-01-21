@@ -212,9 +212,7 @@ def get_assignable_users(db: Session, current_user: dict):
         # Fallback when no department head assigned
         if not dept or not dept.head_user_id:
             # fallback to company admins only (highest hierarchy)
-            users = base_users.filter(
-                User.role == UserRole.COMPANY_ADMIN
-            ).all()
+            users = base_users.filter(User.role == UserRole.COMPANY_ADMIN).all()
         else:
             # normal: fallback head + company admin
             users = base_users.filter(

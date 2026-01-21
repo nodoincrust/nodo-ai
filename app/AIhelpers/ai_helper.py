@@ -19,7 +19,7 @@ def handleChat(*, documentId: int, query: str) -> dict:
 
 
 def handleChatStream(*, documentId: int, query: str) -> Generator[str, None, None]:
-    
+
     sessionId = getOrCreateSessionForDocument(documentId)
 
     # Placeholder: implement streaming version later if needed

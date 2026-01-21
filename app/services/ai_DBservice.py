@@ -12,43 +12,45 @@ from app.models import (
     DocumentSummary,
     ChatSession,
     SessionMessage,
-    SessionMemorySummary,DocumentVersion
+    SessionMemorySummary,
 )
-def getOrCreateSessionForDocument(documentId: int, version: int) -> str:
+
+# ai_DBservice.py (full corrected version)
+
+from typing import Optional
+import uuid
+from sqlalchemy.orm import Session
+from app.db import SessionLocal
+from app.models import AIDocument, ChatSession
+
+
+def getOrCreateSessionForDocument(
+    document_id: int,
+    version_id: Optional[int] = None,
+) -> str:
     db: Session = SessionLocal()
     try:
-        # 1) Validate version exists
-        version_row = (
-            db.query(DocumentVersion)
-            .filter(
-                DocumentVersion.document_id == documentId,
-                DocumentVersion.version_number == version,
-            )
-            .first()
-        )
-        if not version_row:
-            raise ValueError(f"Version {version} does not exist for documentId={documentId}")
+        query = db.query(AIDocument).filter(AIDocument.document_id == document_id)
 
-        # 2) Fetch existing AI document (per document)
-        ai_doc = (
-            db.query(AIDocument)
-            .filter(AIDocument.document_id == documentId)
-            .first()
-        )
+        if version_id is not None:
+            query = query.filter(AIDocument.version_id == version_id)
+
+        ai_doc = query.first()
 
         if not ai_doc:
-            raise ValueError(f"AIDocument missing for document {documentId}; upload expected")
+            raise RuntimeError(
+                f"AIDocument not found for document_id={document_id}, version_id={version_id}. "
+                f"Document must be ingested first."
+            )
 
-        # 3) If session exists → return
         if ai_doc.session_id:
             return str(ai_doc.session_id)
 
-        # 4) Create new session
+        # Create ONLY ChatSession
         session = ChatSession()
         db.add(session)
         db.flush()
 
-        # 5) Attach to AI document
         ai_doc.session_id = session.session_id
         db.commit()
 
@@ -58,16 +60,147 @@ def getOrCreateSessionForDocument(documentId: int, version: int) -> str:
         db.close()
 
 
+def createChunksForExistingAIDocument(
+    documentId: int,
+    versionId: int,
+    filePath: str,
+    filename: str,
+    fileType: str,
+    fileSizeMb: float,
+) -> dict:
+    """
+    Create chunks for an existing AIDocument without recreating sessions.
+    This avoids the session conflict issues in processDocument.
+    """
+    from app.AIhelpers.format_helper import iterateFilePages
+    from app.AIhelpers.chunk_helper import createDocumentChunks
+    from app.db import SessionLocal
+    from app.models import AIDocument
+    import os
+
+    db: Session = SessionLocal()
+    ocrUsed = False
+    chunksCreated = 0
+    lastChunkIndex = 0
+
+    try:
+        # Get existing AIDocument
+        aiDocument = (
+            db.query(AIDocument)
+            .filter(
+                AIDocument.document_id == documentId,
+                AIDocument.version_id == versionId,
+            )
+            .first()
+        )
+
+        if not aiDocument:
+            return {
+                "status": "error",
+                "message": f"AIDocument not found for documentId={documentId}, versionId={versionId}",
+            }
+
+        if not aiDocument.session_id:
+            return {
+                "status": "error",
+                "message": f"AIDocument has no session_id for documentId={documentId}, versionId={versionId}",
+            }
+
+        # Create chunks
+        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
+            if not rawText or not rawText.strip():
+                continue
+
+            ocrUsed |= usedOcr
+
+            created = createDocumentChunks(
+                db=db,
+                ai_document_id=aiDocument.id,
+                session_id=str(aiDocument.session_id),
+                pages=[(pageNumber, rawText)],
+                start_index=lastChunkIndex,
+            )
+
+            lastChunkIndex += created
+            chunksCreated += created
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "document_id": documentId,
+            "chunks": chunksCreated,
+            "ocr_used": ocrUsed,
+            "file_size_mb": round(fileSizeMb, 2),
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
 
 
-# ======================================================
-# DOCUMENT CHUNKS
-# ======================================================
+def createAIDocumentForVersion(
+    document_id: int,
+    version_id: int,
+    filename: str,
+    file_type: str,
+    file_size_mb: float,
+) -> str:
+    """
+    Create AIDocument and session for a document version if it doesn't exist.
+    Returns the session_id.
+    """
+    db: Session = SessionLocal()
+    try:
+        # Check if AIDocument already exists
+        ai_doc = (
+            db.query(AIDocument)
+            .filter(
+                AIDocument.document_id == document_id,
+                AIDocument.version_id == version_id,
+            )
+            .first()
+        )
+
+        if ai_doc:
+            if ai_doc.session_id:
+                return str(ai_doc.session_id)
+            # If exists but no session, create session
+            session = ChatSession()
+            db.add(session)
+            db.flush()
+            ai_doc.session_id = session.session_id
+            db.commit()
+            return str(session.session_id)
+
+        # Create new AIDocument with session
+        session = ChatSession()
+        db.add(session)
+        db.flush()
+
+        ai_doc = AIDocument(
+            document_id=document_id,
+            version_id=version_id,
+            session_id=session.session_id,
+            filename=filename,
+            file_type=file_type,
+            file_size_mb=file_size_mb,
+        )
+        db.add(ai_doc)
+        db.commit()
+
+        return str(session.session_id)
+
+    finally:
+        db.close()
+
 
 def storeDocumentChunk(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
     sessionId: Optional[str],
     chunkText: str,
     embedding: List[float],
@@ -77,7 +210,7 @@ def storeDocumentChunk(
     db.add(
         DocumentChunk(
             id=uuid.uuid4(),
-            document_id=documentId,
+            document_id=document_id,
             session_id=sessionId,
             chunk_text=chunkText,
             embedding=embedding,
@@ -90,11 +223,11 @@ def storeDocumentChunk(
 def fetchDocumentChunks(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
 ) -> List[str]:
     rows = (
         db.query(DocumentChunk.chunk_text)
-        .filter(DocumentChunk.document_id == documentId)
+        .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.chunk_index)
         .all()
     )
@@ -104,31 +237,28 @@ def fetchDocumentChunks(
 def semanticSearchChunks(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
     queryEmbedding: List[float],
     limit: int = 5,
 ) -> List[DocumentChunk]:
     return (
         db.query(DocumentChunk)
-        .filter(DocumentChunk.document_id == documentId)
+        .filter(DocumentChunk.document_id == document_id)
         .order_by(DocumentChunk.embedding.l2_distance(queryEmbedding))
         .limit(limit)
         .all()
     )
 
-# ======================================================
-# DOCUMENT SUMMARY
-# ======================================================
 
 def upsertDocumentSummary(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
     summaryText: str,
 ) -> None:
     existing = (
         db.query(DocumentSummary)
-        .filter(DocumentSummary.document_id == documentId)
+        .filter(DocumentSummary.document_id == document_id)
         .first()
     )
 
@@ -138,7 +268,7 @@ def upsertDocumentSummary(
     else:
         db.add(
             DocumentSummary(
-                document_id=documentId,
+                document_id=document_id,
                 summary_text=summaryText,
             )
         )
@@ -149,18 +279,15 @@ def upsertDocumentSummary(
 def getDocumentSummary(
     db: Session,
     *,
-    documentId: int,
+    document_id: int,
 ) -> Optional[str]:
     summary = (
         db.query(DocumentSummary)
-        .filter(DocumentSummary.document_id == documentId)
+        .filter(DocumentSummary.document_id == document_id)
         .first()
     )
     return summary.summary_text if summary else None
 
-# ======================================================
-# SESSION MESSAGES
-# ======================================================
 
 def addSessionMessage(
     db: Session,
@@ -204,14 +331,9 @@ def getMessageCount(
     sessionId: str,
 ) -> int:
     return (
-        db.query(func.count(SessionMessage.id))
-        .filter_by(session_id=sessionId)
-        .scalar()
+        db.query(func.count(SessionMessage.id)).filter_by(session_id=sessionId).scalar()
     )
 
-# ======================================================
-# SESSION MEMORY
-# ======================================================
 
 def upsertSessionMemory(
     db: Session,

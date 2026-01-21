@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException,Response , Request
+from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import time
@@ -39,13 +39,16 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173",
-        "http://127.0.0.1:5173",],        # or specific frontend URLs
-    allow_credentials=False,    # MUST be False with "*"
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],  # or specific frontend URLs
+    allow_credentials=False,  # MUST be False with "*"
     allow_methods=["*"],
     allow_headers=["*"],
     # max_age=86400,
 )
+
 
 @app.options("/{full_path:path}")
 async def options_handler(full_path: str, request: Request):
@@ -68,6 +71,7 @@ app.mount(
     StaticFiles(directory="storage"),
     name="storage",
 )
+
 
 @app.get("/")
 def greet():

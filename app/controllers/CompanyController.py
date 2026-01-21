@@ -24,7 +24,8 @@ from app.services.Companyservice import (
     delete_employee_details,
     get_employee_list,
     get_list_department,
-    get_all_employees,getDesignation
+    get_all_employees,
+    getDesignation,
 )
 
 router = APIRouter(prefix="/nodo/company")

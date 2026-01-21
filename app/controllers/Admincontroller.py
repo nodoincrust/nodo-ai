@@ -118,4 +118,3 @@ def update_company(
     return update_company_details(
         companyId=companyId, payload=payload, db=db, user=user
     )
-

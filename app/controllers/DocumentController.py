@@ -7,7 +7,11 @@ from fastapi import (
     BackgroundTasks,
     Form,
     Body,
+    
 )
+import uuid
+from fastapi.responses import FileResponse
+from pdf2docx import Converter
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
@@ -390,7 +394,7 @@ def remove_documents(
         db=db,
         current_user=current_user,
         bouquetId=bouquetId,
-        document_id=payload.documentIds,
+        document_id=payload.documentId,
     )
 
 
@@ -403,3 +407,32 @@ def get_approved_documents(
     return get_approved_documents_service(
         db=db, current_user=current_user, filters=filters
     )
+
+
+
+@router.post("/convert")
+async def convert_pdf_to_docx(file: UploadFile = File(...)):
+
+    # use python temp dir (works win/linux)
+    tmp_dir = tempfile.gettempdir()
+
+    input_path = os.path.join(tmp_dir, f"{uuid.uuid4()}.pdf")
+    output_path = input_path.replace(".pdf", ".docx")
+
+    # save uploaded file
+    with open(input_path, "wb") as f:
+        f.write(await file.read())
+
+    # convert
+    cv = Converter(input_path)
+    cv.convert(output_path, start=0, end=None)
+    cv.close()
+
+    # return response
+    return FileResponse(
+        path=output_path,
+        filename=file.filename.replace(".pdf", ".docx"),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+

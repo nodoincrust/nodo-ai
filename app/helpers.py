@@ -311,11 +311,9 @@ def build_tracking_timeline(steps, document_status):
             )
             break
 
-    # === FINAL STAGE DECISION ===
     if rejected:
         return timeline, "REJECTED"
 
-    # all approved?
     if all(s.status == "APPROVED" for s in steps):
         return timeline, "APPROVED"
 

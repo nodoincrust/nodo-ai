@@ -1,18 +1,15 @@
 from dotenv import load_dotenv
-
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import time
-
-from app.controllers.Admincontroller import router as parentRoute
-from app.controllers.CompanyController import router as deptRoute
-from app.controllers.DocumentController import router as deptroute
-from app.controllers.EmployeeController import router as empRoute
+from app.controllers.admin_controller import router as parentRoute
+from app.controllers.company_controller import router as comproute
+from app.controllers.document_controller import router as docroute
+from app.controllers.employee_controller import router as empRoute
+from app.controllers.department_controller import router as deptroute
 from app.db import engine
-from app.models import Base
 from fastapi.exceptions import RequestValidationError
 from app import models
 from app.controllers.ai_controller import router as ai_router
@@ -21,6 +18,8 @@ from app.exception_handler import (
     validation_exception_handler,
     # route_not_found_handler,
 )
+
+
 
 app = FastAPI()
 
@@ -56,10 +55,11 @@ async def options_handler(full_path: str, request: Request):
 
 
 app.include_router(parentRoute)
-app.include_router(deptRoute)
+app.include_router(comproute)
 app.include_router(ai_router)
-app.include_router(deptroute)
+app.include_router(docroute)
 app.include_router(empRoute)
+app.include_router(deptroute)
 
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 # from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
-from app.services.ai_DBservice import getOrCreateSessionForDocument
+from app.services.ai_db_service import getOrCreateSessionForDocument
 import logging
 
 from app.db import SessionLocal

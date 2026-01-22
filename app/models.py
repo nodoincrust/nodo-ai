@@ -1,4 +1,5 @@
 import uuid
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 from sqlalchemy import (
     Column,
     BigInteger,
@@ -23,7 +24,7 @@ from app.db import Base
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from pgvector.sqlalchemy import Vector
 from app.db import Base
-from app.enum import UserRole
+from app.enum import UserRole,ShareTargetType
 
 
 class User(Base):
@@ -450,3 +451,24 @@ class Designation(Base):
     __tablename__ = "designation"
     id = Column(BigInteger, primary_key=True, index=True)
     name = Column(String, nullable=False)
+
+class ShareDocument(Base):
+    __tablename__="shared_target"
+    id = Column(BigInteger,primary_key=True,index=True,autoincrement=True)
+    
+    document_id=Column(BigInteger,ForeignKey("documents.id"),nullable=True)
+    bouquet_id=Column(BigInteger,ForeignKey("bouquets.id"),nullable=True)
+    
+    shared_by=Column(BigInteger,ForeignKey("users.id"),nullable=False)
+    
+    target_type=Column(PGEnum(
+        ShareTargetType,
+        name="share_target_type",
+        create_type=False
+    ),
+     nullable=False)                  
+    target_id=Column(BigInteger,nullable=True)
+    
+    expires_at=Column(DateTime,nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_revoked = Column(Boolean, default=False)

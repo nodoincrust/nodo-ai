@@ -28,6 +28,8 @@ from app.schemas import (
     AppendDocumentsSchema,
     BoqDocsFilter,
     RemoveDocumentsSchema,
+    ShareRequest,
+    SharedDocViewRequest
 )
 from app.services.document_service import (
     processDocument,
@@ -38,8 +40,9 @@ from app.services.document_service import (
     reject_document_step,
     reupload_document_version,
     get_approver_inbox,
+    
 )
-from app.services.bouquetService import (
+from app.services.bouquet_service import (
     createBouquet,
     getBouquetById,
     removeDocumentFromBouquet,
@@ -49,7 +52,10 @@ from app.services.bouquetService import (
     update_boq_details,
     append_documents_to_bouquet,
     get_bouquet_documents_service,
+    
+    
 )
+from app.services.document_sharing import  share_docboq_service,list_shared_bouquets,list_shared_documents
 
 router = APIRouter(prefix="/nodo/newdocuments")
 
@@ -436,3 +442,33 @@ async def convert_pdf_to_docx(file: UploadFile = File(...)):
     )
 
 
+@router.post("/share")
+def share(payload:ShareRequest,
+          db:Session=Depends(get_db),
+          current_user=Depends(get_current_user)):
+    
+    return share_docboq_service(db,current_user,payload)
+
+
+@router.post("/sharedDocument")
+def get_shared_documents(payload:SharedDocViewRequest,db:Session=Depends(get_db),current_user=Depends(get_current_user)):
+    
+    if payload.key not in["doc","boq"]:
+        raise HTTPException(status_code=400,detail="key must be in 'doc' or'boq'")
+    
+    if payload.order not in ["asc","desc"]:
+        raise HTTPException(status_code=400,detail="Order must be in 'asc' or 'desc'")
+    
+    if payload.key == "doc":
+        return list_shared_documents(db,current_user,payload)
+    
+    if payload.key == "boq":
+      return list_shared_bouquets(
+   db,
+   current_user,
+   payload.page,
+   payload.pagelimit,
+   payload.query,
+   payload.sort,
+   payload.order
+)

@@ -14,6 +14,7 @@ from app.models import (
     DocumentApprovalStep,
     DocumentVersion,
     DocumentSummary,
+    ShareDocument
 )
 
 
@@ -567,3 +568,4 @@ def get_bouquet_documents_service(
         "pages": (total + filters.pagelimit - 1) // filters.pagelimit,
         "data": data,
     }
+

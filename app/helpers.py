@@ -6,8 +6,8 @@ import os
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import HTTPException, Depends
 from jose import jwt, JWTError
-from app.enum import UserRole, ROLE_LEVEL
-from app.models import Department, User
+from app.enum import UserRole
+from app.models import Department, User,Document,DocumentSummary,DocumentVersion,AIDocument
 from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.services.summary_service import summarizeDocument
@@ -322,4 +322,28 @@ def build_tracking_timeline(steps, document_status):
 
     return timeline, "IN_PROGRESS"
 
-
+def base_shared_query(db):
+    return (
+        db.query(
+            Document.id.label("id"),
+            Document.current_version.label("version"),
+            Document.created_at.label("created_at"),
+            DocumentVersion.file_name.label("file_name"),
+            DocumentSummary.tags.label("tags")
+        )
+        .join(
+            DocumentVersion,
+            (DocumentVersion.document_id == Document.id) &
+            (DocumentVersion.version_number == Document.current_version)
+        )
+        .outerjoin(
+            AIDocument,
+            (AIDocument.document_id == Document.id) &
+            (AIDocument.version_id == DocumentVersion.id)
+        )
+        .outerjoin(
+            DocumentSummary,
+            (DocumentSummary.ai_document_id == AIDocument.id) &
+            (DocumentSummary.version_id == DocumentVersion.id)
+        )
+    )

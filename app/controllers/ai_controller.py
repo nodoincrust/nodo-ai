@@ -8,7 +8,7 @@ import logging
 
 from app.helpers import get_db, run_summary_job
 from app.models import Document, DocumentVersion, AIDocument
-from app.services.ai_DBservice import (
+from app.services.ai_db_service import (
     getOrCreateSessionForDocument,
     createAIDocumentForVersion,
     createChunksForExistingAIDocument,

@@ -63,3 +63,8 @@ ROLE_ORDER = {
     UserRole.DEPARTMENT_HEAD: 2,
     UserRole.COMPANY_ADMIN: 3,
 }
+
+class ShareTargetType(str,Enum):
+    USER="USER"
+    DEPARTMENT="DEPARTMENT"
+    COMPANY="COMPANY"

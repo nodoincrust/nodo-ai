@@ -2,7 +2,7 @@ from typing import Generator, Optional
 
 from app.services.chat_service import chatWithDocument
 from app.services.summary_service import summarizeDocument
-from app.services.ai_DBservice import getOrCreateSessionForDocument
+from app.services.ai_db_service import getOrCreateSessionForDocument
 
 
 def handleChat(*, documentId: int, query: str) -> dict:

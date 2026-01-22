@@ -13,17 +13,16 @@ from app.models import (
     ChatSession,
     DocumentChunk,
     DocumentVersion,
-    DocumentReview,
     Company,
     DocumentSummary,
     DocumentApprovalStep,
     DocumentWorkflowRun,
-    User,
+    User,ShareDocument
 )
 from app.AIhelpers.chunk_helper import chunkText
 from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
-from app.helpers import build_tracking_timeline
+from app.helpers import build_tracking_timeline,base_shared_query
 
 BASE_STORAGE_PATH = "storage"
 MAX_UPLOAD_MB = 50

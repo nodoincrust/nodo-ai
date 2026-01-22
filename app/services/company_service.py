@@ -662,6 +662,7 @@ def get_all_employees(db: Session, current_user: dict, query: str | None = None)
         base_query = base_query.filter(
             User.department_id == current_user["department_id"]
         )
+    
 
     if query:
         query = query.strip()
@@ -703,4 +704,61 @@ def getDesignation(db: Session):
         "statusCode": 200,
         "message": "Desginations fetched successfully",
         "data": {"roles": roles},
+    }
+    
+def get_deptwise_employee(
+    db: Session,
+    department_id: int,
+    search: str | None = None
+):
+
+    if department_id is None:
+        raise HTTPException(status_code=400, detail="Department id required")
+
+    base_query = db.query(
+        User.id,
+        User.name,
+        User.email,
+        User.department_id,
+    ).filter(
+        User.department_id == department_id,
+        User.is_active.is_(True),
+        User.is_delete.is_(False),
+    )
+
+    # Search filter
+    if search:
+        search = search.strip()
+        if search:
+            like = f"%{search}%"
+            base_query = base_query.filter(
+                or_(
+                    User.name.ilike(like),
+                    User.email.ilike(like),
+                )
+            )
+
+    employees = base_query.order_by(User.created_at.desc()).all()
+
+    if not employees:
+        return {
+            "statusCode": 200,
+            "message": "No employees found for this department",
+            "data": [],
+        }
+
+    data = [
+        {
+            "id": e.id,
+            "name": e.name,
+            "email": e.email,
+        }
+        for e in employees
+    ]
+
+    return {
+        "statusCode": 200,
+        "message": "Employees fetched successfully",
+        "data": data,
+        "total": len(data),
     }

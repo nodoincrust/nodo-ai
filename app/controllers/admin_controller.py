@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
-from app.services.Adminservice import (
+from app.services.admin_service import (
     request_otp_service,
     verify_otp_service,
     create_company_service,

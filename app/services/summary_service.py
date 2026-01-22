@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 from app.db import SessionLocal
 from app.models import DocumentChunk, DocumentSummary, AIDocument, DocumentVersion
 from app.AIhelpers.llm_helper import askLlm, RAGHelper
-from app.services.ai_DBservice import (
+from app.services.ai_db_service import (
     getOrCreateSessionForDocument,
     createChunksForExistingAIDocument,
 )
-from .TagServices import select_top_chunks
+from .tag_service import select_top_chunks
 
 logger = logging.getLogger("ai.summaryService")
 

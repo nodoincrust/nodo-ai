@@ -226,6 +226,7 @@ class getDepartments(BaseModel):
     pagelimit: int = 10
     search: Optional[str] = None
     status: Optional[str] = None
+    showRecord: Optional[bool] = True
 
 
 class getDepartmentList(BaseModel):
@@ -248,9 +249,10 @@ class GetEmployeeList(BaseModel):
 
 
 class getdeptEmployee(BaseModel):
-     search: Optional[str] = None
-     department_id: int | None = None
-     
+    search: Optional[str] = None
+    department_id: int | None = None
+
+
 class GetApprovalDocumentList(BaseModel):
     page: int = 1
     pagelimit: int = 10
@@ -294,12 +296,14 @@ class BoqDocsFilter(BaseModel):
 class RemoveDocumentsSchema(BaseModel):
     documentId: int
 
+
 class ShareRequest(BaseModel):
     document_id: Optional[int] = None
     bouquet_id: Optional[int] = None
     users: List[int] = []
     departments: List[int] = []
     company: bool = False
+
 
 class SharedDocViewRequest(BaseModel):
     key: str

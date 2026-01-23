@@ -1,4 +1,4 @@
-from app.models import ShareDocument, DocumentVersion, Document, Bouquet
+from app.models import ShareDocument, DocumentVersion, Document, Bouquet,User
 from app.helpers import base_shared_query
 from app.enum import ShareTargetType
 from app.schemas import ShareRequest
@@ -58,14 +58,14 @@ def list_shared_documents(db, current_user, payload):
         docs = [
             d
             for d in docs
-            if q in d[3].lower() or (d[4] and q in " ".join(d[4]).lower())
+            if q in d[2].lower() or (d[3] and q in " ".join(d[4]).lower())
         ]
 
     if payload.sort == "name":
-        docs.sort(key=lambda x: x[3].lower(), reverse=(payload.order == "desc"))
+        docs.sort(key=lambda x: x[4].lower(), reverse=(payload.order == "desc"))
 
     elif payload.sort == "date":
-        docs.sort(key=lambda x: x[2], reverse=(payload.order == "desc"))
+        docs.sort(key=lambda x: x[5], reverse=(payload.order == "desc"))
 
     total = len(docs)
     start = (payload.page - 1) * payload.pagelimit
@@ -105,7 +105,7 @@ def normalize_row(r):
 def shared_docs_user(db, user_id):
     rows = (
         base_shared_query(db)
-        .join(ShareDocument, ShareDocument.document_id == Document.id)
+        # .join(ShareDocument, ShareDocument.document_id == Document.id)
         .filter(
             ShareDocument.target_type == ShareTargetType.USER,
             ShareDocument.target_id == user_id,
@@ -119,7 +119,7 @@ def shared_docs_user(db, user_id):
 def shared_docs_dept(db, dept_id):
     rows = (
         base_shared_query(db)
-        .join(ShareDocument, ShareDocument.document_id == Document.id)
+        # .join(ShareDocument, ShareDocument.document_id == Document.id)
         .filter(
             ShareDocument.target_type == ShareTargetType.DEPARTMENT,
             ShareDocument.target_id == dept_id,
@@ -133,7 +133,7 @@ def shared_docs_dept(db, dept_id):
 def shared_docs_company(db, company_id):
     rows = (
         base_shared_query(db)
-        .join(ShareDocument, ShareDocument.document_id == Document.id)
+        # .join(ShareDocument, ShareDocument.document_id == Document.id)
         .filter(
             ShareDocument.target_type == ShareTargetType.COMPANY,
             Document.company_id == company_id,
@@ -145,31 +145,36 @@ def shared_docs_company(db, company_id):
 
 
 def serialize_doc(row):
-    (doc_id, version, created_at, file_name, tags) = row
+    (doc_id, version,file_name,tags,shared_by, created_at ) = row
 
     return {
         "id": doc_id,
         "file_name": file_name,
         "version": version,
         "tags": tags or [],
-        "created_at": created_at,
+        "shared_by":shared_by,
+        "shared_at": created_at
+        
     }
 
 
 def list_shared_bouquets(db, current_user, page, size, query, sort, order):
 
     boqs = gather_shared_boq(db, current_user)
+    
+
 
     # search
     if query:
         q = query.lower()
-        boqs = [b for b in boqs if q in b.name.lower()]
+        boqs = [(b,s,name) for (b,s,name) in boqs if q in b.name.lower()]
 
     # sorting
     if sort == "name":
-        boqs.sort(key=lambda x: x.name.lower(), reverse=(order == "desc"))
+        boqs.sort(key=lambda x: x[4].name.lower(), reverse=(order=="desc"))
     elif sort == "date":
-        boqs.sort(key=lambda x: x.created_at, reverse=(order == "desc"))
+        boqs.sort(key=lambda x: x[5].created_at, reverse=(order=="desc"))
+
 
     # pagination
     total = len(boqs)
@@ -181,7 +186,7 @@ def list_shared_bouquets(db, current_user, page, size, query, sort, order):
         "page": page,
         "size": size,
         "total": total,
-        "bouquets": [serialize_boq(b) for b in boqs],
+        "bouquets": [serialize_boq(b,s,name) for (b,s,name) in boqs],
     }
 
 
@@ -201,8 +206,9 @@ def gather_shared_boq(db, current_user):
 
 def shared_boq_user(db, user_id):
     return (
-        db.query(Bouquet)
+        db.query(Bouquet,ShareDocument,User.name)
         .join(ShareDocument, ShareDocument.bouquet_id == Bouquet.id)
+        .join(User,User.id==ShareDocument.shared_by)
         .filter(
             ShareDocument.target_type == "USER",
             ShareDocument.target_id == user_id,
@@ -214,8 +220,9 @@ def shared_boq_user(db, user_id):
 
 def shared_boq_dept(db, dept_id):
     return (
-        db.query(Bouquet)
+        db.query(Bouquet,ShareDocument,User.name)
         .join(ShareDocument, ShareDocument.bouquet_id == Bouquet.id)
+        .join(User,User.id==ShareDocument.shared_by)
         .filter(
             ShareDocument.target_type == "DEPARTMENT",
             ShareDocument.target_id == dept_id,
@@ -227,8 +234,9 @@ def shared_boq_dept(db, dept_id):
 
 def shared_boq_company(db, company_id):
     return (
-        db.query(Bouquet)
+        db.query(Bouquet,ShareDocument,User.name)
         .join(ShareDocument, ShareDocument.bouquet_id == Bouquet.id)
+        .join(User,User.id==ShareDocument.shared_by)
         .filter(
             ShareDocument.target_type == "COMPANY",
             ShareDocument.is_revoked.is_(False),
@@ -237,8 +245,8 @@ def shared_boq_company(db, company_id):
     )
 
 
-def serialize_boq(b: Bouquet):
-    return {"id": b.id, "name": b.name}
+def serialize_boq(b: Bouquet,s:ShareDocument,name):
+    return {"id": b.id, "name": b.name,"description":b.description,"shared_by":name,"shared_at":s.created_at}
 
 
 def to_hashable(rows):

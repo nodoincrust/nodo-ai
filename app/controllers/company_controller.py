@@ -66,6 +66,7 @@ def list_departments(
         size=payload.pagelimit,
         search=payload.search,
         status=payload.status,
+        showRecord=payload.showRecord
     )
 
 

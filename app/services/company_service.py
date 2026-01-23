@@ -83,9 +83,11 @@ def get_dept_list(
     size: int,
     search: str | None = None,
     status: str | None = None,
+    showRecord: bool = True,
 ):
     offset = (page - 1) * size
 
+    
     base_query = (
         db.query(Department)
         .options(joinedload(Department.head))
@@ -109,21 +111,41 @@ def get_dept_list(
             base_query = base_query.filter(Department.is_active.is_(True))
         elif status.lower() == "inactive":
             base_query = base_query.filter(Department.is_active.is_(False))
-
-    total = base_query.count()
-
-    departments = (
+    if not showRecord:
+        
+        if not search:
+            return {"statusCode": 200, "message": "Search the departments", "data": []} 
+        
+        departments=base_query.all()
+        return {
+            "statusCode": 200,
+            "message": (
+                "Departments fetched successfully" if departments else "No departments found"
+            ),
+            "data": [
+                {
+                    "id": d.id,
+                    "company_id": d.company_id,
+                    "name": d.name,
+                    "description": d.description,
+                    "head_user_id": d.head_user_id,
+                    "head_name": d.head.name if d.head else None,
+                    "is_active": d.is_active,
+                    "created_at": d.created_at,
+                }
+                for d in departments
+            ],
+        }
+    total=base_query.count()
+    departments=(
         base_query.order_by(Department.created_at.desc())
         .offset(offset)
         .limit(size)
         .all()
     )
-
     return {
         "statusCode": 200,
-        "message": (
-            "Departments fetched successfully" if total else "No departments found"
-        ),
+        "message": "Departments fetched successfully" if total else "No departments found",
         "page": page,
         "size": size,
         "total": total,
@@ -141,7 +163,6 @@ def get_dept_list(
             for d in departments
         ],
     }
-
 
 def get_list_department(db: Session, current_user: dict, search: str | None = None):
 
@@ -644,40 +665,47 @@ def get_employee_list(
         ],
     }
 
-
 def get_all_employees(db: Session, current_user: dict, query: str | None = None):
 
-    base_query = db.query(
-        User.id,
-        User.name,
-        User.email,
-    ).filter(
-        User.company_id == current_user["company_id"],
-        User.is_delete.is_(False),
-        User.role == UserRole.EMPLOYEE,
-        User.id != current_user["user_id"],
+    base_query = (
+        db.query(
+            User.id,
+            User.name,
+            User.email,
+        )
+        .filter(
+            User.company_id == current_user["company_id"],
+            User.is_delete.is_(False),
+            User.role == UserRole.EMPLOYEE,
+            User.id != current_user["user_id"],
+        )
     )
 
     if current_user.get("is_department_head"):
         base_query = base_query.filter(
             User.department_id == current_user["department_id"]
         )
-    
 
-    if query:
-        query = query.strip()
-        if query:
-            search = f"%{query}%"
-            base_query = base_query.filter(
-                or_(
-                    User.name.ilike(search),
-                    User.email.ilike(search),
-                )
-            )
+    # If no search → return empty data
+    if not query or not query.strip():
+        return {
+            "statusCode": 200,
+            "message": "No employees found",
+            "data": [],
+            "total": 0,
+        }
 
-    total = base_query.order_by(None).count()
+    # Apply search
+    search = f"%{query.strip()}%"
+    search_query = base_query.filter(
+        or_(
+            User.name.ilike(search),
+            User.email.ilike(search),
+        )
+    )
 
-    employees = base_query.order_by(User.created_at.desc()).all()
+    employees = search_query.order_by(User.created_at.desc()).all()
+    total = len(employees)
 
     return {
         "statusCode": 200,
@@ -705,12 +733,9 @@ def getDesignation(db: Session):
         "message": "Desginations fetched successfully",
         "data": {"roles": roles},
     }
-    
-def get_deptwise_employee(
-    db: Session,
-    department_id: int,
-    search: str | None = None
-):
+
+
+def get_deptwise_employee(db: Session, department_id: int, search: str | None = None):
 
     if department_id is None:
         raise HTTPException(status_code=400, detail="Department id required")

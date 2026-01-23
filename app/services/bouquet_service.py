@@ -466,16 +466,18 @@ def update_boq_details(
 
 def get_bouquet_documents_service(
     db: Session, current_user: dict, bouquetId: int, filters: BoqDocsFilter
-):
+):  
+    print("boqid",bouquetId)
     bouquet = (
         db.query(Bouquet)
         .filter(
             Bouquet.id == bouquetId,
-            Bouquet.createdBy == current_user["user_id"],
+            # Bouquet.createdBy == current_user["user_id"],
             Bouquet.isDelete.is_(False),
         )
         .first()
     )
+    print(bouquet)
 
     if not bouquet:
         raise HTTPException(status_code=404, detail="Bouquet not found")

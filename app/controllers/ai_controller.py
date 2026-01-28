@@ -1,15 +1,17 @@
 # app/controllers/ai_controller.py
 
 from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi.params import Query
 from sqlalchemy.orm import Session
 from uuid import uuid4
 from threading import Thread
 import logging
 
+from typing import Optional
 from app.helpers import get_db, run_summary_job
 from app.models import Document, DocumentVersion, AIDocument
 from app.services.ai_DBservice import getOrCreateSessionForDocument, createAIDocumentForVersion, createChunksForExistingAIDocument
-from app.services.chat_service import chatWithDocument
+from app.services.chat_service import chatWithDocument, fetchChatHistory
 from jobs_store import jobs
 
 router = APIRouter(prefix="/nodo/ai", tags=["AI Features"])
@@ -119,3 +121,13 @@ def get_status(job_id: str):
     if not job:
         return {"status": "not_found"}
     return {"job_id": job_id, **job}
+
+@router.get("/chat/history/{documentId}")
+def get_chat_history(
+    documentId: int,
+    version: int = Query(..., description="AI document version"),
+):
+    return fetchChatHistory(
+        documentId=documentId,
+        version=version,
+    )

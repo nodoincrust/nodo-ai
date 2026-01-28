@@ -1,10 +1,11 @@
 import uuid
 import shutil
+from jose import jwt
 import os
 import logging
 from typing import Dict
 from sqlalchemy.orm import Session
-from app.helpers import normalize_role
+from app.helpers import normalize_role,build_onlyoffice_editor,generate_file_token
 from sqlalchemy import func
 from fastapi import HTTPException
 from datetime import datetime
@@ -31,19 +32,9 @@ logger = logging.getLogger(__name__)
 BASE_STORAGE_PATH = "storage"
 MAX_UPLOAD_MB = 50
 CHUNK_BATCH_SIZE = 32
-
-# =======================================================
-# Helper functions for workflow display
-# =======================================================
-def normalize_role_name(r: str):
-    if r == "EMPLOYEE":
-        return "Uploader"
-    if r == "DEPARTMENT_HEAD":
-        return "Department Head"
-    if r == "COMPANY_ADMIN":
-        return "Company Admin"
-    return r.title()
-
+ONLYOFFICE_SECRET = os.getenv("ONLYOFFICE_SECRET","asdf1234!@yash-dev")
+print("xxxxONLYOFFICE_SECRET", ONLYOFFICE_SECRET)
+ONLYOFFICE_DS_URL = os.getenv("ONLYOFFICE_DS_URL", "http://backend:8081") 
 
 # Helper functions for workflow display
 def normalize_role_name(r: str):
@@ -1168,3 +1159,15 @@ def compute_workflow_view(steps, viewer_id):
         )
 
     return view
+
+def details_editor(*, details, current_user):
+    if isinstance(details, tuple):
+        details = details[0]
+
+    if not isinstance(details, dict):
+        raise TypeError("details must be a dict after normalization")
+
+    # attach editor config to existing response
+    details["editor"] = build_onlyoffice_editor(details, current_user)
+
+    return details

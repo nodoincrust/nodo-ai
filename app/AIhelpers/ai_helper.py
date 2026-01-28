@@ -51,6 +51,7 @@ def askLlmWithMemory(
     session_id: str,
     context: str,
     question: str,
+    system_prompt: str,
 ) -> Dict[str, Dict[str, str]]:
 
     memory = getSessionMemorySummary(db, session_id)  # Loads long-term memory if available
@@ -63,6 +64,7 @@ def askLlmWithMemory(
     result = askLlm(
         context=finalContext,
         question=question,
+        system_prompt=system_prompt,
     )
 
     submitMemoryUpdate(session_id)  # Triggers background memory summarization

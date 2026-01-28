@@ -1,6 +1,6 @@
 from typing import List
 from sqlalchemy.orm import Session
-# from sqlalchemy import func
+from app.AIhelpers.ai_helper import askLlmWithMemory
 from sqlalchemy.exc import SQLAlchemyError
 from app.services.ai_DBservice import getOrCreateSessionForDocument
 import logging
@@ -10,6 +10,7 @@ from app.models import (
     AIDocument,
     DocumentChunk,
     DocumentSummary,
+    DocumentVersion,
     SessionMessage,
     SessionMemorySummary,
 )
@@ -103,11 +104,11 @@ def chatWithDocument(
 
         chat_history = load_recent_chat_history(db, session_id)
 
-        memory = (
-            db.query(SessionMemorySummary)
-            .filter_by(session_id=session_id)
-            .first()
-        )
+        # memory = (
+        #     db.query(SessionMemorySummary)
+        #     .filter_by(session_id=session_id)
+        #     .first()
+        # )
 
         query_embedding = createEmbedding(query.strip().lower())
 
@@ -146,10 +147,10 @@ def chatWithDocument(
 
         final_context_parts = []
 
-        if memory and memory.summary:
-            final_context_parts.append(
-                f"MEMORY SUMMARY (previous conversation):\n{memory.summary}"
-            )
+        # if memory and memory.summary:
+        #     final_context_parts.append(
+        #         f"MEMORY SUMMARY (previous conversation):\n{memory.summary}"
+        #     )
 
         if chat_history:
             final_context_parts.append(
@@ -162,7 +163,14 @@ def chatWithDocument(
 
         final_context = "\n\n".join(final_context_parts)
 
-        llm_result = askLlm(
+        # llm_result = askLlm(
+        #     context=final_context,
+        #     question=query,
+        #     system_prompt=CHAT_SYSTEM_PROMPT,
+        # )
+        llm_result = askLlmWithMemory(
+            db=db,
+            session_id=session_id,
             context=final_context,
             question=query,
             system_prompt=CHAT_SYSTEM_PROMPT,
@@ -184,7 +192,7 @@ def chatWithDocument(
         )
         db.commit()
 
-        submitMemoryUpdate(session_id)
+        # submitMemoryUpdate(session_id)
 
         return {
             "status": "success",
@@ -193,79 +201,65 @@ def chatWithDocument(
         }
     
 
-def fetchFullChatHistorySafe(*, documentId: int) -> dict:
+def fetchChatHistory(
+    *,
+    documentId: int,
+    version: int,
+) -> dict:
 
     response = {
         "status": "empty",
         "documentId": documentId,
+        "version": version,
         "sessionId": None,
-        "memorySummary": None,
         "messages": [],
         "error": None,
     }
 
-    db = SessionLocal()
+    db: Session = SessionLocal()
 
     try:
-        try:
-            sessionId = getOrCreateSessionForDocument(documentId)
-            response["sessionId"] = str(sessionId)
-        except Exception as exc:
-            logger.exception("Failed to resolve session for document %s", documentId)
+        ai_doc = (
+            db.query(AIDocument)
+            .filter(
+                AIDocument.document_id == documentId,
+                DocumentVersion.version_number == version,
+            )
+            .first()
+        )
+
+        if not ai_doc:
             response["status"] = "error"
-            response["error"] = "Session resolution failed"
+            response["error"] = "AI document not found for this version"
             return response
 
-        try:
-            memory = (
-                db.query(SessionMemorySummary)
-                .filter_by(session_id=sessionId)
-                .first()
-            )
-            if memory and memory.summary:
-                response["memorySummary"] = memory.summary
-        except SQLAlchemyError:
-            logger.warning(
-                "Memory summary fetch failed for session %s", sessionId
-            )
+        session_id = ai_doc.session_id
+        response["sessionId"] = str(session_id)
 
-        try:
-            messages = (
-                db.query(SessionMessage)
-                .filter_by(session_id=sessionId)
-                .order_by(SessionMessage.created_at.asc())
-                .all()
-            )
+        # 2️⃣ Fetch full chat history (ALL TIME)
+        messages = (
+            db.query(SessionMessage)
+            .filter(SessionMessage.session_id == session_id)
+            .order_by(SessionMessage.created_at.asc())
+            .all()
+        )
 
-            response["messages"] = [
-                {
-                    "role": m.role,
-                    "content": m.content,
-                    "created_at": (
-                        m.created_at.isoformat()
-                        if m.created_at else None
-                    ),
-                }
-                for m in messages
-            ]
+        response["messages"] = [
+            {
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in messages
+        ]
 
-        except SQLAlchemyError:
-            logger.exception(
-                "Chat message fetch failed for session %s", sessionId
-            )
-            response["status"] = "error"
-            response["error"] = "Failed to fetch chat messages"
-            return response
-        
-        if response["messages"] or response["memorySummary"]:
-            response["status"] = "success"
-
+        response["status"] = "success" if messages else "empty"
         return response
 
-    except Exception as exc:
-        logger.exception("Unexpected error in chat history fetch")
+    except SQLAlchemyError:
+        logger.exception("Chat history fetch failed")
         response["status"] = "error"
-        response["error"] = "Unexpected server error"
+        response["error"] = "Database error"
         return response
 
     finally:

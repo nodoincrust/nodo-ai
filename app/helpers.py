@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import smtplib
 from email.message import EmailMessage
 import os
+import uuid
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import HTTPException, Depends
 from jose import jwt, JWTError
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.services.summary_service import summarizeDocument
 from jobs_store import jobs
-
+from urllib.parse import quote
 def get_db():
     db = SessionLocal()
     try:
@@ -21,6 +22,9 @@ def get_db():
         db.close()
 
 SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret-key")
+BACKEND_BASE_URL = "http://192.168.0.183:8000"
+ONLYOFFICE_JWT_SECRET = os.getenv("ONLYOFFICE_JWT_SECRET", "onlyoffice-secret-key")
+ONLYOFFICE_SECRET = os.getenv("ONLYOFFICE_SECRET","asdf1234!@yash-dev")
 ALGORITHM = "HS256"
 security = HTTPBearer()
 GB = 1024**3
@@ -189,3 +193,94 @@ def normalize_role(step):
 
     # uploader
     return "Uploader"
+
+def build_onlyoffice_editor(details, current_user):
+    file_info = details["file"]
+    doc_info = details["document"]
+
+    ext = file_info["file_name"].split(".")[-1].lower()
+
+    documentType = {
+        "docx": "word",
+        "txt": "word",
+        "xlsx": "cell",
+        "xls": "cell",
+        "csv": "cell",
+        "ppt": "slide",
+        "pptx": "slide",
+        "pdf": "pdf",
+    }.get(ext, "word")
+
+    editable = (
+        doc_info["uploaded_by"] == current_user["user_id"]
+        and doc_info["status"] in ["DRAFT", "REJECTED","REUPLOADED"]
+    )
+
+    file_token = generate_file_token(
+        document_id=doc_info["id"],
+        version=file_info["version_number"],
+        user_id=current_user["user_id"],
+        file_path=file_info["file_path"],
+    )           # /storage/companies/...
+    encoded_path = quote(file_info["file_path"])                # encode spaces
+
+    # file_url = f"{BACKEND_BASE_URL}{encoded_path}",
+    print("Uploaded by:", doc_info["uploaded_by"])
+    print("Current user:", current_user["user_id"])
+    print("Status:", doc_info["status"])
+
+    config = {
+        "documentType": documentType,
+        "document": {
+            "fileType": ext,
+            "title": file_info["file_name"],
+            "key": f"{doc_info['id']}-{file_info['version_number']}",
+
+            "url": f"{BACKEND_BASE_URL}{encoded_path}",
+
+            "permissions": {
+                "edit": editable,
+                "download": True,
+                "print": True,
+                "review": True,
+                "comment": True,
+            },
+        },
+        "editorConfig": {
+            "mode": "edit" if editable else "view",
+            "type": "desktop",
+            "TOOLBAR_NO_TABS": False,
+            "user": {
+                "id": str(current_user["user_id"]),
+                "name": current_user.get("name", "User"),
+            },
+            "customization": {
+                "compactheader": False,
+                "toolbarNoTabs": False,
+                "hideRightMenu": False,
+                "autosave": True,
+                "forceSave": True,
+            },
+            "callbackUrl": (
+                f"{BACKEND_BASE_URL}/nodo/newdocuments/onlyoffice/callback/"
+                f"{doc_info['id']}"
+            ),
+        },
+    }
+    token = jwt.encode(config, ONLYOFFICE_SECRET, algorithm="HS256")
+    config["token"] = token
+
+    return config
+
+FILE_TOKEN_STORE = {}
+
+def generate_file_token(*, document_id, version, user_id, file_path):
+    token = str(uuid.uuid4())
+    FILE_TOKEN_STORE[token] = {
+        "document_id": document_id,
+        "version": version,
+        "user_id": user_id,
+        "file_path": file_path,  # ✅ REQUIRED
+        "expires_at": datetime.utcnow() + timedelta(minutes=10),
+    }
+    return token

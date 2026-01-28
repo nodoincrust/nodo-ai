@@ -1,12 +1,15 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks,Form,Body
+from fastapi import APIRouter, Request, UploadFile, File, Depends, HTTPException, BackgroundTasks,Form,Body
+from fastapi.responses import FileResponse
+from requests import request
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
 import os
 from app.models import Document
-from app.helpers import get_db, get_current_user
+from app.helpers import FILE_TOKEN_STORE, get_db, get_current_user
 from app.schemas import DocumentSaveSchema,GetApprovalDocumentList
 from app.services.document_service import (
+    details_editor,
     processDocument,
     createDocumentDraft,
     saveDocument,
@@ -18,6 +21,8 @@ from app.services.document_service import (
 from app.services.BouquetService import(
     createBouquet,getBouquetById,appendDocumentToBouquet,removeDocumentFromBouquet,deleteBouquet,getAllBoqList
 )
+import logging
+logger = logging.getLogger("document.controller")
  
 router = APIRouter(prefix="/nodo/newdocuments")
  
@@ -141,16 +146,26 @@ def get_document_details(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    return {
-        "statusCode": 200,
-        "data": get_document_full_details(
+    details = get_document_full_details(
             db=db,
             document_id=document_id,
             version=version,
             current_user=current_user,
         ),
+    details = details_editor(
+        details=details,
+        current_user=current_user,
+    ) 
+    return {
+        "statusCode": 200,
+        "data" : details,
+        # "data": get_document_full_details(
+        #     db=db,
+        #     document_id=document_id,
+        #     version=version,
+        #     current_user=current_user,
+        # ),
     }
- 
  
 @router.post("/approve/{document_id}")
 def approve_document(
@@ -368,3 +383,62 @@ def removeDocument(
     )
  
     return {"message": "Document removed from bouquet successfully"}
+
+@router.api_route("/internal/onlyoffice/file/{token}", methods=["GET", "POST", "HEAD"])
+def stream_file_by_token(token: str):
+    logger.info(f"Request received for token: {token}, method: {request.method}")  # *** ADD: Log the request method ***
+    meta = FILE_TOKEN_STORE.get(token)
+    if not meta:
+        logger.warning(f"Invalid token: {token}")  # *** ADD: Log invalid token ***
+        raise HTTPException(status_code=403)
+
+    file_path = meta["file_path"].lstrip("/")
+
+    if not os.path.exists(file_path):
+        logger.error(f"File not found: {file_path}")  # *** ADD: Log missing file ***
+        raise HTTPException(status_code=404)
+
+    logger.info(f"Serving file: {file_path}")  # *** ADD: Log successful serve ***
+    return FileResponse(
+        path=file_path,
+        filename=os.path.basename(file_path),
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{os.path.basename(file_path)}"',
+        }
+    )
+
+@router.post("/onlyoffice/callback/{document_id}")
+async def onlyoffice_callback(document_id: int, request: Request):
+    body = await request.json()
+    logger.info(f"OnlyOffice callback for doc {document_id}: {body}")
+    
+    status = body.get("status")
+    if status == 2:
+        changed_url = body.get("url")
+        return {"error": 0}  # Success response to OnlyOffice
+    
+    return {"error": 0}  # Acknowledge
+
+@router.api_route("/internal/onlyoffice/storage/{full_path:path}", methods=["GET", "HEAD"])
+def onlyoffice_stream(full_path: str):
+    
+    safe_root = os.path.abspath("storage")
+    abs_path = os.path.abspath(os.path.join("storage", full_path.replace("storage/", "")))
+
+    if not abs_path.startswith(safe_root):
+        raise HTTPException(status_code=403, detail="Invalid path")
+
+    if not os.path.exists(abs_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        path=abs_path,
+        filename=os.path.basename(abs_path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+        },
+    )

@@ -8,3 +8,7 @@ pip install  python-docx openpyxl xlrd requests
 
 python -m pip install pymupdf pytesseract pillow pdf2image 
 python -m spacy download en_core_web_sm
+
+python-pptx>=0.6.21
+pytesseract>=0.3.10
+pdf2image>=1.16.3

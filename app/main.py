@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException,Response , Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import time
-
+# from app.controllers.onlyfileController import router as editorrouter
 from app.controllers.Admincontroller import router as parentRoute
 from app.controllers.CompanyController import router as deptRoute
 from app.controllers.DocumentController import router as deptroute
@@ -57,6 +57,7 @@ app.include_router(deptRoute)
 app.include_router(ai_router)
 app.include_router(deptroute)
 app.include_router(empRoute)
+# app.include_router(editorrouter)
 
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)

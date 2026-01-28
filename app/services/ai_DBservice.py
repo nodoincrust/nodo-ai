@@ -1,11 +1,12 @@
 from typing import Optional, List, Tuple
 from datetime import datetime, timezone
 import uuid
-
+from app.AIhelpers.format_helper import iterateFilePages
+from app.AIhelpers.chunk_helper import createDocumentChunks
+from app.db import SessionLocal
+    
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-
-from app.db import SessionLocal
 from app.models import (
     AIDocument,
     DocumentChunk,
@@ -14,13 +15,6 @@ from app.models import (
     SessionMessage,
     SessionMemorySummary,
 )
-# ai_DBservice.py (full corrected version)
-
-from typing import Optional
-import uuid
-from sqlalchemy.orm import Session
-from app.db import SessionLocal
-from app.models import AIDocument, ChatSession
 
 def getOrCreateSessionForDocument(
     document_id: int,
@@ -67,15 +61,6 @@ def createChunksForExistingAIDocument(
     fileType: str,
     fileSizeMb: float,
 ) -> dict:
-    """
-    Create chunks for an existing AIDocument without recreating sessions.
-    This avoids the session conflict issues in processDocument.
-    """
-    from app.AIhelpers.format_helper import iterateFilePages
-    from app.AIhelpers.chunk_helper import createDocumentChunks
-    from app.db import SessionLocal
-    from app.models import AIDocument
-    import os
     
     db: Session = SessionLocal()
     ocrUsed = False

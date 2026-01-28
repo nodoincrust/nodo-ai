@@ -43,15 +43,45 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
             missing.append({"index": i, "text": texts[i]})
 
     if not missing:
-        return results 
+        return results
 
     for item in missing:
         idx = item["index"]
-        text = item["text"]
+        raw_text = (item["text"] or "").strip()
+
+        if not raw_text:
+            vector = [0.0] * EMBED_DIM
+            results[idx] = vector
+            REDIS.setex(_cache_key(raw_text), CACHE_TTL, json.dumps(vector))
+            continue
+
+        alpha_count = sum(ch.isalpha() for ch in raw_text)
+        digit_count = sum(ch.isdigit() for ch in raw_text)
+
+        text = raw_text
+
+        # Numeric / table heavy → normalize to semantic text
+        if digit_count > alpha_count:
+            # Convert tables / rows into descriptive language
+            lines = raw_text.splitlines()[:20]
+
+            semantic_lines = []
+            for line in lines:
+                clean = line.replace("|", " ").replace(",", " ").strip()
+                if clean:
+                    semantic_lines.append(f"Data row containing values: {clean}")
+
+            text = (
+                "The following section contains structured numeric or tabular data. "
+                "It describes measurements, quantities, identifiers, or metrics.\n"
+                + "\n".join(semantic_lines)
+            )
+        if len(text) > 4000:
+            text = text[:4000]
 
         payload = {
             "model": EMBED_MODEL,
-            "prompt": text, 
+            "prompt": text,
         }
 
         try:
@@ -73,15 +103,14 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
 
         results[idx] = vector
         REDIS.setex(
-            _cache_key(text),
+            _cache_key(raw_text),
             CACHE_TTL,
             json.dumps(vector),
         )
 
         logger.info("Embedding sample: %s", vector[:5])
 
-    return results 
-
+    return results
 
 def createEmbedding(text: str) -> List[float]:
     return createEmbeddings([text])[0]

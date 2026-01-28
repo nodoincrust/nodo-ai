@@ -47,6 +47,8 @@ _STOPWORDS = {
 
 def cleanInputText(text: str) -> str:
     """Removes non-printable chars"""
+    if not text:
+        return ""
     return _NON_PRINTABLE_RE.sub(" ", text)  
 
 
@@ -103,10 +105,6 @@ def askLlm(
     system_prompt: str,
     retries: int = 3,
 ) -> Dict[str, Dict[str, str]]:
-    """
-    Generic LLM caller.
-    Caller MUST explicitly pass system_prompt.
-    """
     logger.info(
         f"askLlm called - context length: {len(context)}, question: {question[:100]}..."
     )
@@ -117,15 +115,14 @@ def askLlm(
     payload = {
         "model": MODEL,
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "system", "content": f"Context:\n{optimizedContext}"},
+            {"role": "system", "content": f"{system_prompt}\n\nContext:\n{optimizedContext}"},
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.6,
-            "num_predict": 700,
+            "temperature": 0.5,
+            "num_predict": 450,
             "num_ctx": 16384,
-            "top_k": 40,
+            "top_k": 20,
             "top_p": 0.9,
         },
         "stream": False,

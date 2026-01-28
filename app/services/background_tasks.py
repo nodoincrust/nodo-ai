@@ -4,7 +4,7 @@ from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from app.db import SessionLocal
-from app.models import SessionMessage, SessionMemorySummary
+from app.models import SessionMessage
 from app.services.memory_service import pruneOldMessages, updateMemorySummary
 from app.services.memory_service import updateMemorySummary
 
@@ -56,7 +56,6 @@ def runMemoryUpdate(sessionId: str) -> None:
             messageCount=messageCount,
         )
 
-        # Prune ONLY if summary succeeded
         if updated:
             deleted = pruneOldMessages(
                 db,
@@ -88,4 +87,4 @@ def shutdownExecutor() -> None:
     if _executor:
         logger.info("Shutting down background executor")
         _executor.shutdown(wait=False, cancel_futures=True)
-        _executor = None                                # Gracefully shuts down threads
+        _executor = None                                # shuts down threads

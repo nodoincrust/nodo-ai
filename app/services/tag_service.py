@@ -49,15 +49,12 @@ def generateTagsFromLLM(
     tag_prompt = """
 You are an expert at generating relevant tags for documents.
  
-Analyze the provided document excerpts and generate 5-10 concise tags (2-4 words each) that capture the main themes, topics, and entities.
+Analyze the provided document excerpts and generate 2-3 concise tags (2-4 words each) that capture the main themes, topics, and entities.
  
 Examples of good tags:
 - "carbon footprint"
 - "environmental impact"
 - "product lifecycle data"
-- "kgCO2eq metrics"
-- "furniture products"
-- "supplier emissions"
  
 Return ONLY a JSON array of strings, like: ["tag1", "tag2", "tag3"]
 """
@@ -117,7 +114,7 @@ Return ONLY a JSON array of strings, like: ["tag1", "tag2", "tag3"]
                 if 2 <= len(cleaned) <= 30:
                     cleaned_tags.append(cleaned)
 
-        return cleaned_tags[:10]  # Limit to 10 tags
+        return cleaned_tags[:4]  # Limit to 10 tags
 
     except Exception as e:
         logger.exception("Error generating tags from LLM: %s", str(e))
@@ -153,7 +150,7 @@ def _fallback_keywords(text: str) -> List[str]:
     try:
         words = re.findall(r"\b\w+\b", text.lower())
         keywords = [w for w in words if w.isalpha() and w not in stop_words]
-        return list(set(keywords))[:10]
+        return list(set(keywords))[:4]
     except Exception as e:
         logger.error(f"Keyword fallback failed: {e}")
         return []

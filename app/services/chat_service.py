@@ -12,7 +12,7 @@ from app.models import (
     DocumentChunk,
     DocumentSummary,
     SessionMessage,
-    SessionMemorySummary,
+    SessionMemorySummary,DocumentVersion
 )
 from app.AIhelpers.embedding_helper import createEmbedding
 from app.AIhelpers.llm_helper import askLlm
@@ -24,7 +24,9 @@ TOP_K = 20  # number of chunks to retrieve
 MAX_CHAT_HISTORY = 15  # recent messages only
 
 CHAT_SYSTEM_PROMPT = """
-You are a document-grounded AI assistant.
+You are a document-grounded AI ASSISTANT.
+when anyone can request about your information then you can simply return 
+My name is NODO-AI ASSISTANT and my work is to help you
  
 Rules:
 - Answer ONLY using the provided document context
@@ -182,72 +184,64 @@ def chatWithDocument(
             "citations": citations,
         }
 
-
-def fetchFullChatHistorySafe(*, documentId: int) -> dict:
-
+ 
+def fetchChatHistory(
+    *,
+    documentId: int,
+) -> dict:
+ 
     response = {
         "status": "empty",
         "documentId": documentId,
         "sessionId": None,
-        "memorySummary": None,
         "messages": [],
         "error": None,
     }
-
-    db = SessionLocal()
-
+ 
+    db: Session = SessionLocal()
+ 
     try:
-        try:
-            sessionId = getOrCreateSessionForDocument(documentId)
-            response["sessionId"] = str(sessionId)
-        except Exception as exc:
-            logger.exception("Failed to resolve session for document %s", documentId)
-            response["status"] = "error"
-            response["error"] = "Session resolution failed"
-            return response
-
-        try:
-            memory = (
-                db.query(SessionMemorySummary).filter_by(session_id=sessionId).first()
+        ai_doc = (
+            db.query(AIDocument)
+            .filter(
+                AIDocument.document_id == documentId,
             )
-            if memory and memory.summary:
-                response["memorySummary"] = memory.summary
-        except SQLAlchemyError:
-            logger.warning("Memory summary fetch failed for session %s", sessionId)
-
-        try:
-            messages = (
-                db.query(SessionMessage)
-                .filter_by(session_id=sessionId)
-                .order_by(SessionMessage.created_at.asc())
-                .all()
-            )
-
-            response["messages"] = [
-                {
-                    "role": m.role,
-                    "content": m.content,
-                    "created_at": (m.created_at.isoformat() if m.created_at else None),
-                }
-                for m in messages
-            ]
-
-        except SQLAlchemyError:
-            logger.exception("Chat message fetch failed for session %s", sessionId)
+            .first()
+        )
+ 
+        if not ai_doc:
             response["status"] = "error"
-            response["error"] = "Failed to fetch chat messages"
+            response["error"] = "AI document not found for this version"
             return response
-
-        if response["messages"] or response["memorySummary"]:
-            response["status"] = "success"
-
+ 
+        session_id = ai_doc.session_id
+        response["sessionId"] = str(session_id)
+ 
+        # 2️⃣ Fetch full chat history (ALL TIME)
+        messages = (
+            db.query(SessionMessage)
+            .filter(SessionMessage.session_id == session_id)
+            .order_by(SessionMessage.created_at.asc())
+            .all()
+        )
+ 
+        response["messages"] = [
+            {
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in messages
+        ]
+ 
+        response["status"] = "success" if messages else "empty"
         return response
-
-    except Exception as exc:
-        logger.exception("Unexpected error in chat history fetch")
+ 
+    except SQLAlchemyError:
+        logger.exception("Chat history fetch failed")
         response["status"] = "error"
-        response["error"] = "Unexpected server error"
+        response["error"] = "Database error"
         return response
-
+ 
     finally:
         db.close()

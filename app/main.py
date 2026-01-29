@@ -81,3 +81,15 @@ def greet():
 @app.on_event("startup")
 def startup():
     models.Base.metadata.create_all(bind=engine)
+
+
+# @app.middleware('http')
+# async def load_request(request:Request,call_next):
+#  user_ip = request.client.host
+#  user_agent = request.headers.get("user-agent")
+#  print("IP",user_ip)
+#  print("User-Agent",user_agent)
+ 
+#  response = await  call_next(request)
+#  return response
+ 

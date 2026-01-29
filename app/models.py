@@ -472,3 +472,51 @@ class ShareDocument(Base):
     expires_at=Column(DateTime,nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_revoked = Column(Boolean, default=False)
+    
+class FormTemplate(Base):
+    __tablename__="form_templates"
+    
+    id = Column(BigInteger,primary_key=True,index=True)
+    template_name = Column(String(255),nullable=False)
+    
+    created_by=Column(
+        BigInteger,
+        ForeignKey("users.id",ondelete="RESTRICT"),
+        nullable=False
+    )
+    
+    created_at=Column(DateTime,default=datetime.now())
+    updated_at=Column(DateTime,default=datetime.now())
+    
+    fields = relationship(
+        "FormField",
+        back_populates="template",
+        cascade="all,delete-orphan"
+    )
+    
+class FormField(Base):
+    __tablename__ = "form_fields"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    template_id = Column(
+        BigInteger,
+        ForeignKey("form_templates.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    type = Column(String(50), nullable=False)
+    label = Column(String(255), nullable=False)
+    placeholder = Column(String(255), nullable=True)
+    required = Column(Boolean, default=False)
+    field_order = Column(Integer, nullable=False)
+
+    options = Column(JSON, nullable=True)
+    errmsg = Column(String(255),nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    template = relationship(
+        "FormTemplate",
+        back_populates="fields"
+    )

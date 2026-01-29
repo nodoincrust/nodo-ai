@@ -29,7 +29,10 @@ from app.schemas import (
     BoqDocsFilter,
     RemoveDocumentsSchema,
     ShareRequest,
-    SharedDocViewRequest
+    SharedDocViewRequest,
+    FormTemplateCreate,
+    getTemplate
+    
 )
 from app.services.document_service import (
     processDocument,
@@ -40,6 +43,7 @@ from app.services.document_service import (
     reject_document_step,
     reupload_document_version,
     get_approver_inbox,
+    
     
 )
 from app.services.bouquet_service import (
@@ -52,7 +56,9 @@ from app.services.bouquet_service import (
     update_boq_details,
     append_documents_to_bouquet,
     get_bouquet_documents_service,
-    
+    createTemplate,
+    get_templates_list,
+    get_templates_feilds
     
 )
 from app.services.document_sharing import  share_docboq_service,list_shared_bouquets,list_shared_documents
@@ -472,3 +478,24 @@ def get_shared_documents(payload:SharedDocViewRequest,db:Session=Depends(get_db)
    payload.sort,
    payload.order
 )
+
+@router.post("/savetemplate")
+def save_template(
+    payload:FormTemplateCreate,
+    db:Session = Depends(get_db),
+    current_user:dict = Depends(get_current_user)
+):
+    return createTemplate(db=db,payload=payload,current_user=current_user)
+
+
+@router.post("/templates")
+def get_templates(payload:getTemplate,db:Session = Depends(get_db), 
+                  current_user:dict =Depends(get_current_user)                  
+                  ):
+                    return get_templates_list(db,current_user=current_user,payload=payload)
+    
+
+@router.post("/templatesFeilds/{template_id}")
+def get_templatesFeilds(template_id:int,db:Session= Depends(get_db),current_user:dict=Depends(get_current_user)):
+    
+    return get_templates_feilds(db,current_user=current_user,template_id=template_id)

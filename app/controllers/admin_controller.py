@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from app.services.admin_service import (
     request_otp_service,
     verify_otp_service,
@@ -17,31 +17,24 @@ from app.schemas import (
     GetCompaniesRequest,
 )
 from sqlalchemy.orm import Session
-from app.helpers import get_current_user
+from app.helpers import get_current_user,get_db
 from app.enum import UserRole
 
 router = APIRouter(prefix="/nodo")
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
+#below route is for request otp 
 @router.post("/request-otp")
 def request_otp(
     email: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
 ):
-    return request_otp_service(
+    return request_otp_service( #calling function from service layer
         email=email,
         background_tasks=background_tasks,
         db=db,
     )
 
 
+# this route is to verify otp
 @router.post("/verify-otp")
 def verify_otp(payload: VerifyOTPSchema, db: Session = Depends(get_db)):
     return verify_otp_service(email=payload.email, otp=payload.otp, db=db)

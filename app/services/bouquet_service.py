@@ -14,7 +14,8 @@ from app.models import (
     DocumentApprovalStep,
     DocumentVersion,
     DocumentSummary,
-    ShareDocument
+    FormTemplate,
+    FormField
 )
 
 
@@ -569,5 +570,129 @@ def get_bouquet_documents_service(
         "limit": filters.pagelimit,
         "pages": (total + filters.pagelimit - 1) // filters.pagelimit,
         "data": data,
+    }
+
+def createTemplate(db:Session,payload,current_user:dict):
+    
+    try:
+        template = FormTemplate(
+            template_name=payload.templateName,
+            created_by=current_user["user_id"]
+        )
+        
+        db.add(template)
+        db.flush()
+        
+        
+        fields_to_create=[
+            FormField(
+                template_id=template.id,
+                type=field.type,
+                label=field.label,
+                placeholder=field.placeholder,
+                required=field.required or False,
+                field_order=field.order,
+                options=field.options,
+                errmsg=field.requiredErrorMessage
+            )
+            for field in payload.fields
+        ]
+        
+        db.add_all(fields_to_create)
+        db.commit()
+            
+        return {
+            "statusCode":200,
+            "message":"Template created successfully"
+        }
+    except Exception:
+        db.rollback()
+        raise
+    
+def get_templates_list(db:Session,current_user:dict,payload):
+    
+    
+    query=(
+        db.query(FormTemplate)
+        .filter(FormTemplate.created_by == current_user["user_id"])
+    )
+    
+    if payload.search:
+        query=query.filter(
+            FormTemplate.template_name.ilike(f"%{payload.search}%")
+        )
+    
+    total_count=query.count()
+    
+    offset = (payload.page - 1)* payload.pagelimit
+    
+    templates=(
+        query
+        .order_by(FormTemplate.created_at.desc())
+        .offset(offset)
+        .limit(payload.pagelimit)
+        .all()
+    )
+    
+    data=[
+        {
+        "id":template.id,
+        "templateName":template.template_name,
+        "createdAt":template.created_at
+    }
+    for template in templates
+    ]
+    
+    return {
+        "statusCode":200,
+        "message":"Template fetched successfully",
+        "data":data,
+        "page":payload.page,
+        "pagelimit":payload.pagelimit,
+        "total":total_count
+    }
+    
+    
+def get_templates_feilds(db:Session,template_id:int,current_user:dict):
+    
+    template=(
+        db.query(FormTemplate)
+        .filter(FormTemplate.id==template_id,
+        FormTemplate.created_by == current_user["user_id"]
+        
+        ).first()
+    )
+    
+    if not template:
+        raise HTTPException(
+            status_code=404,
+            detail="Template not found"
+        )
+    
+    data={
+            "id":template.id,
+            "templateName":template.template_name,
+            "fields":[
+                {
+                    "id":field.id,
+                    "type":field.type,
+                    "label":field.label,
+                    "placeholder":field.placeholder,
+                    "required":field.required,
+                    "order":field.field_order,
+                    "options":field.options or [],
+                    "requiredErrorMessage":field.errmsg
+                }
+                for field in sorted(
+                    template.fields,
+                    key=lambda f: f.field_order
+                )
+            ]
+        }
+    
+    return {
+        "statusCode":200,
+        "message":"Fields fetched successfully",
+        "data":data
     }
 

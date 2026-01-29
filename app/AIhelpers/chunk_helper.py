@@ -73,9 +73,9 @@ def createDocumentChunks(
     session_id: str,
     pages: Iterable[Any],
     start_index: int = 0,
-    chunkSize: int = 1024,   # Increased
+    chunkSize: int = 1024,   
     overlap: int = 128,
-    EMBED_BATCH_SIZE: int = 48,  # Increased for speed
+    EMBED_BATCH_SIZE: int = 48, 
 ) -> int:
     chunk_index = start_index
     chunks_created = 0
@@ -97,7 +97,6 @@ def createDocumentChunks(
             texts.append(text)
             pages_meta.append(chunk["page"])
  
-            # BATCH FLUSH
             if len(texts) == EMBED_BATCH_SIZE:
                 vectors = createEmbeddings(texts)
  
@@ -119,7 +118,6 @@ def createDocumentChunks(
                 texts.clear()
                 pages_meta.clear()
  
-        # Flush remaining chunks
         if texts:
             vectors = createEmbeddings(texts)
  
@@ -138,7 +136,7 @@ def createDocumentChunks(
                 chunk_index += 1
                 chunks_created += 1
  
-        return chunks_created   # ✅ FIX: ALWAYS RETURN INT
+        return chunks_created  
  
     except Exception as exc:
         return 0  
@@ -147,7 +145,6 @@ def select_top_chunks(db: Session, chunks: List[DocumentChunk], query_text: str,
  
     try:
         query_emb = createEmbeddings([query_text])[0]
-        # Use pgvector cosine distance operator
         results = (
             db.query(DocumentChunk)
             .order_by(DocumentChunk.embedding.op('<->')(query_emb))         # Use pgvector cosine distance operator
@@ -156,5 +153,4 @@ def select_top_chunks(db: Session, chunks: List[DocumentChunk], query_text: str,
         )
         return results
     except Exception as e:
-        # logger.warning(f"Chunk selection failed: {e}; using all chunks")
         return chunks[:top_k]

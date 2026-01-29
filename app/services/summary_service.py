@@ -48,12 +48,10 @@ Make the summary more comprehensive and professional while staying faithful to t
 """
 
 TAG_GUIDANCE = """
-For tags, generate 5-8 concise tags (2-4 words each) that are *highly relevant* to the document's content.
+For tags, generate 3-4 concise tags (2-4 words each) that are *highly relevant* to the document's content.
 Examples of good, relevant tags:
-- "carbon footprint"
 - "environmental impact"
 - "product lifecycle data"
-- "kgCO2eq metrics"
 - "furniture products"
 - "supplier emissions"
 """
@@ -324,7 +322,7 @@ def summarizeDocument(
             t.title().strip()
             for t in parsed["tags"]
             if isinstance(t, str) and 2 <= len(t.strip()) <= 30
-        ][:10]
+        ][:4]
 
         if not tags:
             logger.warning("Tags missing; using keyword fallback")
@@ -382,7 +380,7 @@ def summarizeDocument(
                                 t.title().strip()
                                 for t in parsed["tags"]
                                 if isinstance(t, str) and 2 <= len(t.strip()) <= 30
-                            ][:10] or tags
+                            ][:4] or tags
 
                             logger.info("RAG refinement completed successfully")
             except Exception as rag_exc:

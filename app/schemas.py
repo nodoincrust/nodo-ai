@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List, Literal
+from typing import Optional, List, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -312,3 +312,22 @@ class SharedDocViewRequest(BaseModel):
     query: str | None = None
     sort: str | None = None
     order: str = "asc"
+
+
+class FormFieldCreate(BaseModel):
+    type:str
+    label:str
+    placeholder:Optional[str] = None
+    required:Optional[bool] = False
+    order:int
+    options:Optional[List[Any]] = None
+    requiredErrorMessage:str
+    
+class FormTemplateCreate(BaseModel):
+    templateName:str
+    fields:List[FormFieldCreate]
+    
+class getTemplate(BaseModel):
+    search: Optional[str] = None
+    page: int = 1
+    pagelimit: int = 10

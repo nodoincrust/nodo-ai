@@ -13,7 +13,7 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:3b-instruct-q4_0"
 
 # SYSTEM_PROMPT = """
-# You are a document-grounded AI assistant.
+# You are a document-grounded AI Nodo-ai .
 
 # Rules:
 # - Answer ONLY using the provided document context

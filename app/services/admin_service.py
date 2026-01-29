@@ -15,7 +15,7 @@ from app.models import (
     DocumentVersion,
     Document,
 )
-from app.enum import UserRole, SIDEBAR_MENU
+from app.enum import UserRole
 from app.schemas import CreateCompanySchema, UpdateCompanySchema
 from app.helpers import (
     otp_generate,
@@ -38,16 +38,15 @@ if not SECRET_KEY:
 
 logger = logging.getLogger(__name__)
 
-
+#below function is to send otp via email and for that first we check if user exist based on email if yes then we grant him access 
 def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Session):
     user = db.query(User).filter(User.email == email, User.is_delete.is_(False)).first()
-    print(user.__dict__)
     if not user:
         raise HTTPException(
             status_code=404,
             detail="The provided credentials do not correspond to any registered user.",
         )
-    if not user.is_active:
+    if not user.is_active: # this check is for if user is inactive and try to login then it will throw this exception 
         raise HTTPException(
             status_code=404,
             detail="Access has been disabled. Please contact your company Admin."
@@ -58,14 +57,16 @@ def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Sessi
             OTPLogin.user_id == user.id, OTPLogin.is_used.is_(False)
         ).update({"is_used": True})
 
-        # otp = otp_generate()
+        # otp = otp_generate() # here we generate random otp 
         otp = 1234
-
+        
+        # here we store generated otp into db with expiry
         otp_entry = OTPLogin(user_id=user.id, otp_code=otp, expires_at=otp_expiry())
 
         db.add(otp_entry)
         db.commit()
 
+        #this is for email sending as SMTP is Third party api and it takes time to send email so we put it into background task 
         background_tasks.add_task(send_otp_email, email, otp)
 
         return {"statusCode": 200, "message": "OTP sent successfully"}
@@ -98,7 +99,8 @@ def get_sidebar_for_user(db: Session, role: str):
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to load sidebar menus")
 
-
+# this function is for verify otp it verifies otp based on db entry it takes email 
+# to fetch otp and compares the request otp and db otp is same if it matches then it will return token,sidebarmenu,info etc
 def verify_otp_service(email: str, otp: str, db: Session):
     user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
     if not user:

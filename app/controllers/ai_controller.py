@@ -1,6 +1,6 @@
 # app/controllers/ai_controller.py
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path,Query
 from sqlalchemy.orm import Session
 from uuid import uuid4
 from threading import Thread
@@ -11,8 +11,9 @@ from app.models import Document, DocumentVersion, AIDocument
 from app.services.ai_db_service import (
     getOrCreateSessionForDocument,
     createAIDocumentForVersion,
-    createChunksForExistingAIDocument,
+    createChunksForExistingAIDocument
 )
+from app.services.chat_service import fetchChatHistory
 from app.services.chat_service import chatWithDocument
 from jobs_store import jobs
 
@@ -141,3 +142,13 @@ def get_status(job_id: str):
     if not job:
         return {"status": "not_found"}
     return {"job_id": job_id, **job}
+
+@router.get("/chat/history/{documentId}")
+def get_chat_history(
+    documentId: int,
+   
+):
+    return fetchChatHistory(
+        documentId=documentId,
+       
+    )

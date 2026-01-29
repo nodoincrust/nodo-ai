@@ -1,4 +1,4 @@
-from typing import Generator, Optional
+from typing import Generator
 
 from app.services.chat_service import chatWithDocument
 from app.services.summary_service import summarizeDocument

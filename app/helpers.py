@@ -240,26 +240,42 @@ def build_onlyoffice_editor(details, current_user):
 
             "permissions": {
                 "edit": editable,
-                "download": True,
-                "print": True,
-                "review": True,
-                "comment": True,
+                "download": False,   # disable download permanently
+                "print": False,      # disable print permanently
+                "comment": False,
+                "review": False,
+                "copy": True,
+                "protect": False,
+                "chat": False,
+                "fillForms": False,
+                "modifyContentControl": False,
+                "showReviewChanges": False,
+                "info": False,
             },
         },
         "editorConfig": {
             "mode": "edit" if editable else "view",
-            "type": "desktop",
-            "TOOLBAR_NO_TABS": False,
             "user": {
                 "id": str(current_user["user_id"]),
                 "name": current_user.get("name", "User"),
             },
             "customization": {
-                "compactheader": False,
-                "toolbarNoTabs": False,
-                "hideRightMenu": False,
+                # Removes unwanted feature tabs
+                "hideRightMenu": True,
+                "plugins": False,
+                "help": False,
+                "feedback": False,
+                "about": False,
+                "collaboration": False,
+                "protection": False,
+                #Disable unwanted features
+                "showReviewChanges": False,
+                "comments": False,
+                "spellcheck": True,
+                "compactHeader": False,
+
                 "autosave": True,
-                "forceSave": True,
+                "forcesave": True,
             },
             "callbackUrl": (
                 f"{BACKEND_BASE_URL}/nodo/newdocuments/onlyoffice/callback/"

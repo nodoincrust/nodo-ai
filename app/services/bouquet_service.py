@@ -5,7 +5,7 @@ from sqlalchemy.orm import aliased
 from app.helpers import bytes_to_mb
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.orm import Session
-from app.schemas import BoqFilter, DocFilter, updateBouquet, BoqDocsFilter
+from app.schemas import BoqFilter, DocFilter, updateBouquet, BoqDocsFilter,TemplateSubmissionCreate
 
 from app.models import (
     Bouquet,
@@ -15,7 +15,9 @@ from app.models import (
     DocumentVersion,
     DocumentSummary,
     FormTemplate,
-    FormField
+    FormField,
+    TemplateSubmissionValue,
+    TemplateSubmission
 )
 
 
@@ -572,43 +574,187 @@ def get_bouquet_documents_service(
         "data": data,
     }
 
-def createTemplate(db:Session,payload,current_user:dict):
+# def createTemplate(db:Session,payload,current_user:dict):
     
-    try:
-        template = FormTemplate(
-            template_name=payload.templateName,
-            created_by=current_user["user_id"]
-        )
+#     try:
+#         template = FormTemplate(
+#             template_name=payload.templateName,
+#             created_by=current_user["user_id"]
+#         )
         
-        db.add(template)
-        db.flush()
+#         db.add(template)
+#         db.flush()
         
         
-        fields_to_create=[
-            FormField(
-                template_id=template.id,
-                type=field.type,
-                label=field.label,
-                placeholder=field.placeholder,
-                required=field.required or False,
-                field_order=field.order,
-                options=field.options,
-                errmsg=field.requiredErrorMessage
-            )
-            for field in payload.fields
-        ]
+#         fields_to_create=[
+#             FormField(
+#                 template_id=template.id,
+#                 type=field.type,
+#                 label=field.label,
+#                 placeholder=field.placeholder,
+#                 required=field.required or False,
+#                 field_order=field.order,
+#                 options=field.options,
+#                 errmsg=field.requiredErrorMessage
+#             )
+#             for field in payload.fields
+#         ]
         
-        db.add_all(fields_to_create)
-        db.commit()
+#         db.add_all(fields_to_create)
+#         db.commit()
             
+#         return {
+#             "statusCode":200,
+#             "message":"Template created successfully"
+#         }
+#     except Exception:
+#         db.rollback()
+#         raise
+def createTemplate(db: Session, payload, current_user: dict):
+    try:
+        # ==========================
+        # UPDATE TEMPLATE
+        # ==========================
+       
+        if payload.templateId:
+            template = (
+                db.query(FormTemplate)
+                .filter(
+                    FormTemplate.id == payload.templateId,
+                    FormTemplate.created_by == current_user["user_id"]
+                )
+                .first()
+            )
+
+            if not template:
+                raise HTTPException(status_code=404, detail="Template not found")
+
+            template.template_name = payload.templateName
+
+            existing_fields = (
+                db.query(FormField)
+                .filter(FormField.template_id == template.id)
+                .all()
+            )
+
+            existing_map = {f.id: f for f in existing_fields}
+            received_ids = set()
+            new_fields = []
+
+            for row in payload.rows:
+                for field in row.fields:
+                    # 🔑 composite order preserves rows
+                    composite_order = (row.rowOrder * 100) + field.fieldOrder
+
+                    if field.id and field.id in existing_map:
+                        db_field = existing_map[field.id]
+
+                        db_field.type = field.type
+                        db_field.label = field.label
+                        db_field.placeholder = field.placeholder
+                        db_field.required = bool(field.required)
+                        db_field.errmsg = field.requiredErrorMessage
+                        db_field.options = field.options
+                        db_field.allowedfiletypes = normalize_allowed_file_types(
+                            field.allowedfiletypes
+                        )
+                        db_field.classname = field.classname
+                        db_field.field_order = composite_order
+
+                        received_ids.add(db_field.id)
+
+                    else:
+                        new_fields.append(
+                            FormField(
+                                template_id=template.id,
+                                type=field.type,
+                                label=field.label,
+                                placeholder=field.placeholder,
+                                required=bool(field.required),
+                                errmsg=field.requiredErrorMessage,
+                                field_order=composite_order,
+                                options=field.options,
+                                allowedfiletypes=normalize_allowed_file_types(
+                                    field.allowedfiletypes
+                                ),
+                                classname=field.classname
+                            )
+                        )
+
+            # 🗑 delete removed fields
+            for db_field in existing_fields:
+                if db_field.id not in received_ids:
+                    db.delete(db_field)
+
+            if new_fields:
+                db.add_all(new_fields)
+
+        # ==========================
+        # CREATE TEMPLATE
+        # ==========================
+        else:
+            existing_template=(
+                db.query(FormTemplate)
+                .filter(
+                    FormTemplate.template_name == payload.templateName,
+                    FormTemplate.created_by == current_user["user_id"]
+                ).first()
+            )
+            
+            if existing_template:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Template with {payload.templateName} already exist! "
+                )
+                
+            template = FormTemplate(
+                template_name=payload.templateName,
+                created_by=current_user["user_id"]
+            )
+
+            db.add(template)
+            db.flush()
+
+            new_fields = []
+
+            for row in payload.rows:
+                for field in row.fields:
+                    composite_order = (row.rowOrder * 100) + field.fieldOrder
+
+                    new_fields.append(
+                        FormField(
+                            template_id=template.id,
+                            type=field.type,
+                            label=field.label,
+                            placeholder=field.placeholder,
+                            required=bool(field.required),
+                            errmsg=field.requiredErrorMessage,
+                            field_order=composite_order,
+                            options=field.options,
+                            allowedfiletypes=normalize_allowed_file_types(
+                                field.allowedfiletypes
+                            ),
+                            classname=field.classname
+                        )
+                    )
+
+            db.add_all(new_fields)
+
+        db.commit()
+
         return {
-            "statusCode":200,
-            "message":"Template created successfully"
+            "statusCode": 200,
+            "message": (
+                "Template updated successfully"
+                if payload.templateId
+                else "Template created successfully"
+            )
         }
+
     except Exception:
         db.rollback()
         raise
-    
+
 def get_templates_list(db:Session,current_user:dict,payload):
     
     
@@ -652,47 +798,133 @@ def get_templates_list(db:Session,current_user:dict,payload):
         "total":total_count
     }
     
-    
-def get_templates_feilds(db:Session,template_id:int,current_user:dict):
-    
-    template=(
+def get_templates_feilds(db: Session, template_id: int, current_user: dict):
+
+    template = (
         db.query(FormTemplate)
-        .filter(FormTemplate.id==template_id,
-        FormTemplate.created_by == current_user["user_id"]
-        
-        ).first()
+        .filter(
+            FormTemplate.id == template_id,
+            # FormTemplate.created_by == current_user["user_id"]
+        )
+        .first()
     )
+
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    rows = build_rows_from_fields(template.fields)
+
+    return {
+        "statusCode": 200,
+        "message": "Fields fetched successfully",
+        "data": {
+            "templateId": template.id,
+            "templateName": template.template_name,
+            "rows": rows
+        }
+    }
+    
+
+
+def build_rows_from_fields(fields):
+    rows_map = {}
+
+    # sort by global field order
+    sorted_fields = sorted(fields, key=lambda f: f.field_order)
+
+    for field in sorted_fields:
+        row_order = field.field_order // 100
+        field_order = field.field_order % 100
+
+        if row_order not in rows_map:
+            rows_map[row_order] = {
+                "rowOrder": row_order,
+                "fields": []
+            }
+
+        rows_map[row_order]["fields"].append({
+            "id": field.id,
+            "type": field.type,
+            "label": field.label,
+            "placeholder": field.placeholder,
+            "required": field.required,
+            "requiredErrorMessage": field.errmsg or "",
+            "options": field.options or [],
+            "allowedfiletypes": field.allowedfiletypes,
+            "classname": field.classname,
+            "fieldOrder": field_order
+        })
+
+    # return rows sorted by rowOrder
+    return [rows_map[k] for k in sorted(rows_map.keys())]
+
+
+
+
+
+def normalize_allowed_file_types(value):
+    if not value:
+        return None
+    if isinstance(value, list):
+        return ",".join(value)
+    return str(value)
+
+
+def delete_templates_service(db:Session,current_user:dict,templateID):
+    
+    if not templateID:
+        raise HTTPException(status_code=400,detail="Template id required")
+    
+    template=(db.query(FormTemplate)
+                .filter(FormTemplate.id==templateID,FormTemplate.created_by==current_user["user_id"]) .first()
+            )           
+    
     
     if not template:
-        raise HTTPException(
-            status_code=404,
-            detail="Template not found"
-        )
+        raise HTTPException(status_code=404,detail="Template id not found")
     
-    data={
-            "id":template.id,
-            "templateName":template.template_name,
-            "fields":[
-                {
-                    "id":field.id,
-                    "type":field.type,
-                    "label":field.label,
-                    "placeholder":field.placeholder,
-                    "required":field.required,
-                    "order":field.field_order,
-                    "options":field.options or [],
-                    "requiredErrorMessage":field.errmsg
-                }
-                for field in sorted(
-                    template.fields,
-                    key=lambda f: f.field_order
-                )
-            ]
-        }
+    db.delete(template)
+    db.commit()
     
-    return {
+    return{
         "statusCode":200,
-        "message":"Fields fetched successfully",
-        "data":data
+        "message":"Template deleted successfully"
     }
+    
+def submit_template_form(
+    db: Session,
+    payload: TemplateSubmissionCreate,
+    current_user: dict
+):
+    template = db.query(FormTemplate).filter(
+        FormTemplate.id == payload.templateId
+    ).first()
 
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    submission = TemplateSubmission(
+        template_id=payload.templateId,
+        submitted_by=current_user["user_id"]
+    )
+
+    db.add(submission)
+    db.flush() 
+
+    values_to_insert = [
+        TemplateSubmissionValue(
+            submission_id=submission.id,
+            field_id=item.fieldId,
+            value=item.value
+        )
+        for item in payload.values
+    ]
+
+    db.add_all(values_to_insert)
+    db.commit()
+
+    return {
+        "statusCode": 200,
+        "message": "Form submitted successfully",
+        "submissionId": submission.id
+    }

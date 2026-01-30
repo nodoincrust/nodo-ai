@@ -31,7 +31,7 @@ from app.schemas import (
     ShareRequest,
     SharedDocViewRequest,
     FormTemplateCreate,
-    getTemplate
+    getTemplate,TemplateSubmissionCreate
     
 )
 from app.services.document_service import (
@@ -58,10 +58,12 @@ from app.services.bouquet_service import (
     get_bouquet_documents_service,
     createTemplate,
     get_templates_list,
-    get_templates_feilds
+    get_templates_feilds,
+    delete_templates_service,
+    submit_template_form
     
 )
-from app.services.document_sharing import  share_docboq_service,list_shared_bouquets,list_shared_documents
+from app.services.document_sharing import  share_docboq_service,list_shared_bouquets,list_shared_documents,list_shared_templates
 
 router = APIRouter(prefix="/nodo/newdocuments")
 
@@ -455,29 +457,42 @@ def share(payload:ShareRequest,
     
     return share_docboq_service(db,current_user,payload)
 
-
 @router.post("/sharedDocument")
-def get_shared_documents(payload:SharedDocViewRequest,db:Session=Depends(get_db),current_user=Depends(get_current_user)):
-    
-    if payload.key not in["doc","boq"]:
-        raise HTTPException(status_code=400,detail="key must be in 'doc' or'boq'")
-    
-    if payload.order not in ["asc","desc"]:
-        raise HTTPException(status_code=400,detail="Order must be in 'asc' or 'desc'")
-    
+def get_shared_documents(
+    payload: SharedDocViewRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+
+    if payload.key not in ["doc", "boq", "template"]:
+        raise HTTPException(
+            status_code=400,
+            detail="key must be in 'doc', 'boq' or 'template'"
+        )
+
+    if payload.order not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Order must be in 'asc' or 'desc'"
+        )
+
     if payload.key == "doc":
-        return list_shared_documents(db,current_user,payload)
-    
+        return list_shared_documents(db, current_user, payload)
+
     if payload.key == "boq":
-      return list_shared_bouquets(
-   db,
-   current_user,
-   payload.page,
-   payload.pagelimit,
-   payload.query,
-   payload.sort,
-   payload.order
-)
+        return list_shared_bouquets(
+            db,
+            current_user,
+            payload.page,
+            payload.pagelimit,
+            payload.query,
+            payload.sort,
+            payload.order
+        )
+
+    if payload.key == "template":
+        return list_shared_templates(db, current_user, payload)
+
 
 @router.post("/savetemplate")
 def save_template(
@@ -499,3 +514,21 @@ def get_templates(payload:getTemplate,db:Session = Depends(get_db),
 def get_templatesFeilds(template_id:int,db:Session= Depends(get_db),current_user:dict=Depends(get_current_user)):
     
     return get_templates_feilds(db,current_user=current_user,template_id=template_id)
+
+@router.delete("/deleteTemplate/{templateID}")
+def delete_template(templateID:int,db:Session=Depends(get_db),current_user:dict=Depends(get_current_user)):
+    
+    return delete_templates_service(db,current_user=current_user,templateID=templateID)
+
+
+@router.post("/submitForm")
+def submit_template(
+    payload: TemplateSubmissionCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    return submit_template_form(
+        db=db,
+        payload=payload,
+        current_user=current_user
+    )

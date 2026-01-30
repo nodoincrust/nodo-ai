@@ -458,6 +458,7 @@ class ShareDocument(Base):
     
     document_id=Column(BigInteger,ForeignKey("documents.id"),nullable=True)
     bouquet_id=Column(BigInteger,ForeignKey("bouquets.id"),nullable=True)
+    template_id = Column(BigInteger, nullable=True)  
     
     shared_by=Column(BigInteger,ForeignKey("users.id"),nullable=False)
     
@@ -513,6 +514,8 @@ class FormField(Base):
 
     options = Column(JSON, nullable=True)
     errmsg = Column(String(255),nullable=True)
+    classname = Column(String(255),nullable=True)
+    allowedfiletypes = Column(String(255), nullable=True)   
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -520,3 +523,27 @@ class FormField(Base):
         "FormTemplate",
         back_populates="fields"
     )
+class TemplateSubmission(Base):
+    __tablename__ = "template_submissions"
+
+    id = Column(BigInteger, primary_key=True)
+    template_id = Column(
+        BigInteger,
+        ForeignKey("form_templates.id", ondelete="CASCADE")
+    )
+    submitted_by = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class TemplateSubmissionValue(Base):
+    __tablename__ = "template_submission_values"
+
+    id = Column(BigInteger, primary_key=True)
+    submission_id = Column(
+        BigInteger,
+        ForeignKey("template_submissions.id", ondelete="CASCADE")
+    )
+    field_id = Column(
+        BigInteger,
+        ForeignKey("form_fields.id", ondelete="CASCADE")
+    )
+    value = Column(JSON)  # store any type safely

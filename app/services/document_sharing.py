@@ -1,4 +1,4 @@
-from app.models import ShareDocument, DocumentVersion, Document, Bouquet,User
+from app.models import ShareDocument, DocumentVersion, Document, Bouquet,User,FormTemplate
 from app.helpers import base_shared_query
 from app.enum import ShareTargetType
 from app.schemas import ShareRequest
@@ -15,6 +15,7 @@ def share_docboq_service(db: Session, current_user, payload: ShareRequest):
             ShareDocument(
                 document_id=payload.document_id,
                 bouquet_id=payload.bouquet_id,
+                template_id=payload.template_id,
                 shared_by=current_user["user_id"],
                 target_type=ShareTargetType.USER,
                 target_id=uid,
@@ -26,6 +27,7 @@ def share_docboq_service(db: Session, current_user, payload: ShareRequest):
             ShareDocument(
                 document_id=payload.document_id,
                 bouquet_id=payload.bouquet_id,
+                template_id=payload.template_id,
                 shared_by=current_user["user_id"],
                 target_type=ShareTargetType.DEPARTMENT,
                 target_id=dept_id,
@@ -37,6 +39,7 @@ def share_docboq_service(db: Session, current_user, payload: ShareRequest):
             ShareDocument(
                 document_id=payload.document_id,
                 bouquet_id=payload.bouquet_id,
+                template_id=payload.template_id,
                 shared_by=current_user["user_id"],
                 target_type=ShareTargetType.COMPANY,
                 target_id=None,
@@ -258,3 +261,83 @@ def to_hashable(rows):
             r[-1] = tuple(r[-1])
         result.append(tuple(r))  # now entire row is hashable
     return result
+
+def list_shared_templates(db, current_user, payload):
+
+    templates = gather_shared_templates(db, current_user)
+
+    if payload.query:
+        q = payload.query.lower()
+        templates = [
+            t for t in templates if q in t[1].lower()
+        ]
+
+    total = len(templates)
+    start = (payload.page - 1) * payload.pagelimit
+    end = start + payload.pagelimit
+    templates = templates[start:end]
+
+    return {
+        "page": payload.page,
+        "pagelimit": payload.pagelimit,
+        "total": total,
+        "templates": [serialize_template(t) for t in templates],
+    }
+
+def serialize_template(row):
+    template_id, template_name, shared_by, created_at = row
+
+    return {
+        "id": template_id,
+        "templateName": template_name,
+        "shared_by": shared_by,
+        "shared_at": created_at
+    }
+
+def shared_templates_user(db, user_id):
+    return base_shared_template_query(db).filter(
+        ShareDocument.target_type == ShareTargetType.USER,
+        ShareDocument.target_id == user_id,
+        ShareDocument.is_revoked.is_(False),
+    ).all()
+
+
+def shared_templates_dept(db, dept_id):
+    return base_shared_template_query(db).filter(
+        ShareDocument.target_type == ShareTargetType.DEPARTMENT,
+        ShareDocument.target_id == dept_id,
+        ShareDocument.is_revoked.is_(False),
+    ).all()
+
+
+def shared_templates_company(db, company_id):
+    return base_shared_template_query(db).filter(
+        ShareDocument.target_type == ShareTargetType.COMPANY,
+        ShareDocument.is_revoked.is_(False),
+    ).all()
+
+def gather_shared_templates(db, current_user):
+    rows = []
+
+    rows.extend(shared_templates_user(db, current_user["user_id"]))
+    rows.extend(shared_templates_dept(db, current_user["department_id"]))
+    rows.extend(shared_templates_company(db, current_user["company_id"]))
+
+    dedup = {}
+    for r in rows:
+        dedup[r[0]] = r  # template_id
+
+    return list(dedup.values())
+
+def base_shared_template_query(db):
+    return (
+        db.query(
+            FormTemplate.id,
+            FormTemplate.template_name,
+            User.name,
+            ShareDocument.created_at
+        )
+        .join(ShareDocument, ShareDocument.template_id == FormTemplate.id)
+        .join(User, User.id == ShareDocument.shared_by)
+        .filter(ShareDocument.template_id.isnot(None))
+    )

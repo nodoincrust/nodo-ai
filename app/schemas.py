@@ -300,6 +300,7 @@ class RemoveDocumentsSchema(BaseModel):
 class ShareRequest(BaseModel):
     document_id: Optional[int] = None
     bouquet_id: Optional[int] = None
+    template_id: Optional[int] = None 
     users: List[int] = []
     departments: List[int] = []
     company: bool = False
@@ -315,19 +316,38 @@ class SharedDocViewRequest(BaseModel):
 
 
 class FormFieldCreate(BaseModel):
-    type:str
-    label:str
-    placeholder:Optional[str] = None
-    required:Optional[bool] = False
-    order:int
-    options:Optional[List[Any]] = None
-    requiredErrorMessage:str
-    
+        id: Optional[int] = None  
+
+        type: str
+        label: str
+        placeholder: Optional[str] = None
+
+        required: Optional[bool] = False
+        requiredErrorMessage: Optional[str] = None
+
+        fieldOrder: int
+
+        options: Optional[List[Any]] = None
+        classname: Optional[str] = None
+        allowedfiletypes: Optional[Any] = None  # string | array | undefined
+
+class FormRowCreate(BaseModel):
+        rowOrder: int
+        fields: List[FormFieldCreate]
+
 class FormTemplateCreate(BaseModel):
-    templateName:str
-    fields:List[FormFieldCreate]
-    
+        templateId: Optional[int] = None
+        templateName: str
+        rows: List[FormRowCreate]
+
 class getTemplate(BaseModel):
-    search: Optional[str] = None
-    page: int = 1
-    pagelimit: int = 10
+        search: Optional[str] = None
+        page: int = 1
+        pagelimit: int = 10
+class TemplateFieldValue(BaseModel):
+    fieldId: int
+    value: Any
+
+class TemplateSubmissionCreate(BaseModel):
+    templateId: int
+    values: List[TemplateFieldValue]

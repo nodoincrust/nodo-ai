@@ -1,9 +1,12 @@
 import uuid
-import logging
 import shutil
+from jose import jwt
 import os
+import logging
 from typing import Dict
 from sqlalchemy.orm import Session
+from app.helpers import normalize_role,build_onlyoffice_editor,generate_file_token
+from sqlalchemy import func
 from fastapi import HTTPException
 from datetime import datetime
 from app.db import SessionLocal
@@ -19,15 +22,19 @@ from app.models import (
     DocumentWorkflowRun,
     User,ShareDocument
 )
-from app.AIhelpers.chunk_helper import chunkText
+from app.AIhelpers.chunk_helper import chunkText, createDocumentChunks
 from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
 from app.helpers import build_tracking_timeline,base_shared_query
 
+logger = logging.getLogger(__name__)
+
 BASE_STORAGE_PATH = "storage"
 MAX_UPLOAD_MB = 50
 CHUNK_BATCH_SIZE = 32
-
+ONLYOFFICE_SECRET = os.getenv("ONLYOFFICE_SECRET","asdf1234!@yash-dev")
+print("xxxxONLYOFFICE_SECRET", ONLYOFFICE_SECRET)
+ONLYOFFICE_DS_URL = os.getenv("ONLYOFFICE_DS_URL", "http://backend:8081") 
 
 # Helper functions for workflow display
 def normalize_role_name(r: str):
@@ -119,6 +126,7 @@ def processDocument(
     filename: str,
     fileType: str,
     fileSizeMb: float,
+
 ) -> Dict:
 
     if not isinstance(documentId, int):
@@ -127,8 +135,8 @@ def processDocument(
         )
 
     db: Session = SessionLocal()
-    chunksCreated = 0
     ocrUsed = False
+    chunksCreated = 0
 
     try:
         # Always create chat session per version
@@ -164,6 +172,10 @@ def processDocument(
 
         # ---------- CREATE IF NOT FOUND ----------
         if not aiDocument:
+            session = ChatSession()
+            db.add(session)
+            db.flush()
+
             aiDocument = AIDocument(
                 document_id=documentId,
                 version_id=versionId,
@@ -179,34 +191,35 @@ def processDocument(
             session.session_id = aiDocument.session_id
 
         # ---------- CHUNKING & OCR ----------
+        lastChunkIndex = 0
         for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
             if not rawText or not rawText.strip():
                 continue
 
             ocrUsed |= usedOcr
 
-            for chunk in chunkText(rawText):
-                db.add(
-                    DocumentChunk(
-                        id=uuid.uuid4(),
-                        ai_document_id=aiDocument.id,
-                        session_id=aiDocument.session_id,
-                        chunk_index=chunksCreated,
-                        chunk_text=chunk,
-                        page_number=pageNumber,
-                    )
-                )
-                chunksCreated += 1
+            created = createDocumentChunks(
+                db=db,
+                ai_document_id=aiDocument.id,
+                session_id=aiDocument.session_id,
+                pages=[(pageNumber, rawText)],
+                start_index=lastChunkIndex,
+            )
+
+            lastChunkIndex += created
+            chunksCreated += created
 
         db.commit()
 
         return {
+            "status": "success",
+            "document_id": documentId,
             "chunks": chunksCreated,
             "ocr_used": ocrUsed,
-            "session_id": str(aiDocument.session_id),
+            "file_size_mb": round(fileSizeMb, 2),
         }
 
-    except Exception:
+    except Exception as e:
         db.rollback()
         raise
 
@@ -229,7 +242,6 @@ def saveDocument(
     )
     if not document:
         raise HTTPException(404, "Document not found")
-
     if document.uploaded_by != currentUser["user_id"]:
         raise HTTPException(403, "Permission denied")
 
@@ -239,7 +251,6 @@ def saveDocument(
         "SUBMITTED",
     ):
         raise HTTPException(400, "Only draft documents can be edited")
-
     version = (
         db.query(DocumentVersion)
         .filter(DocumentVersion.document_id == document.id)
@@ -248,13 +259,11 @@ def saveDocument(
     )
     if not version:
         raise HTTPException(500, "No version found")
-
     ai_document = (
         db.query(AIDocument).filter(AIDocument.document_id == document.id).first()
     )
     if not ai_document:
         raise HTTPException(500, "AI Document missing")
-
     version_summary = (
         db.query(DocumentSummary)
         .filter(
@@ -263,7 +272,6 @@ def saveDocument(
         )
         .first()
     )
-
     if version_summary:
         version_summary.summary_text = payload.summary or version_summary.summary_text
         version_summary.tags = payload.tags or version_summary.tags or []
@@ -297,6 +305,7 @@ def saveDocument(
 
     db.commit()
 
+    db.commit()
     return {
         "document_id": document.id,
         "version_id": version.id,
@@ -324,10 +333,8 @@ def createDocumentDraft(
         )
         .first()
     )
-
     if not company:
         raise HTTPException(404, "Company not found")
-
     # Create base document
     document = Document(
         company_id=company.id,
@@ -337,7 +344,6 @@ def createDocumentDraft(
     )
     db.add(document)
     db.flush()
-
     # Ensure storage path
     docDir = os.path.join(
         BASE_STORAGE_PATH,
@@ -365,7 +371,6 @@ def createDocumentDraft(
         summary=None,  # per version summary support
         tags=[],  # per version tags support
     )
-
     db.add(version)
 
     # Update document pointer
@@ -425,7 +430,6 @@ def get_document_full_details(
         )
         .first()
     )
-
     if not document:
         raise HTTPException(404, "Document not found")
 
@@ -472,7 +476,6 @@ def get_document_full_details(
         )
         .first()
     )
-
     # fallback for legacy docs
     if not ai_document:
         ai_document = (
@@ -483,7 +486,6 @@ def get_document_full_details(
             )
             .first()
         )
-
     summary_entry = (
         db.query(DocumentSummary)
         .join(AIDocument, AIDocument.id == DocumentSummary.ai_document_id)
@@ -568,7 +570,6 @@ def approve_document_step(
     )
     if not document:
         raise HTTPException(404, "Document not found")
-
     # latest version
     version = (
         db.query(DocumentVersion)
@@ -578,7 +579,6 @@ def approve_document_step(
     )
     if not version:
         raise HTTPException(500, "Version not found")
-
     current_step = (
         db.query(DocumentApprovalStep)
         .filter(
@@ -606,14 +606,12 @@ def approve_document_step(
         )
         .first()
     )
-
     if next_step:
         next_step.status = "PENDING"
         document.current_assignee_id = next_step.assigned_to
         document.current_step_order = next_step.step_order
         db.commit()
         return {"message": "Approved. Moving to next approver."}
-
     # Final approval
     workflow = (
         db.query(DocumentWorkflowRun)
@@ -658,7 +656,6 @@ def reject_document_step(
     )
     if not document:
         raise HTTPException(404, "Document not found")
-
     # latest version
     version = (
         db.query(DocumentVersion)
@@ -668,7 +665,6 @@ def reject_document_step(
     )
     if not version:
         raise HTTPException(500, "Version not found")
-
     current_step = (
         db.query(DocumentApprovalStep)
         .filter(
@@ -1164,7 +1160,6 @@ def compute_workflow_view(steps, viewer_id):
             else:
                 display = s.status.title()
                 actionable = False
-
         else:
             if s.status == "APPROVED":
                 display = f"Approved by {normalize_role_name(s.approver_type)}"
@@ -1190,3 +1185,15 @@ def compute_workflow_view(steps, viewer_id):
         )
 
     return view
+
+def details_editor(*, details, current_user):
+    if isinstance(details, tuple):
+        details = details[0]
+
+    if not isinstance(details, dict):
+        raise TypeError("details must be a dict after normalization")
+
+    # attach editor config to existing response
+    details["editor"] = build_onlyoffice_editor(details, current_user)
+
+    return details

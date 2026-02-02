@@ -35,7 +35,6 @@ Rules:
 - If the information is not present in the document, say so clearly
 """
 
-
 def load_recent_chat_history(
     db: Session,
     session_id: str,
@@ -69,6 +68,23 @@ def semantic_search_chunks(
         .all()
     )
 
+
+def semantic_search_chunks(
+    db: Session,
+    *,
+    ai_document_id: int,
+    query_embedding: List[float],
+    top_k: int = TOP_K,
+) -> List[DocumentChunk]:
+    return (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.ai_document_id == ai_document_id)
+        .order_by(
+            DocumentChunk.embedding.cosine_distance(query_embedding)
+        )
+        .limit(top_k)
+        .all()
+    )
 
 def chatWithDocument(
     *,

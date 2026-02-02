@@ -1,0 +1,34 @@
+services:
+  onlyoffice-documentserver:
+    image: onlyoffice/documentserver:latest
+    container_name: onlyoffice-documentserver
+    restart: always
+    ports:
+      - "8080:80"
+    environment:
+      - JWT_ENABLED=true
+      - JWT_SECRET=asdf1234!@yash-dev
+      - JWT_HEADER=Authorization
+    volumes:
+      - ./storage/onlyoffice/data:/var/www/onlyoffice/Data
+      - ./storage/onlyoffice/logs:/var/log/onlyoffice
+    networks:
+      - app-network
+
+  backend:  # Add if backend is Dockerized
+    build: .  # Or image: your-backend-image
+    container_name: backend
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      - ONLYOFFICE_SECRET=asdf1234!@yash-dev
+      # Add other envs
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

@@ -3,18 +3,17 @@ from app.models import SessionMessage, SessionMemorySummary
 from app.AIhelpers.llm_helper import askLlm
 
 MEMORY_SUMMARY_THRESHOLD = 10  # summarize after N messages
-KEEP_LAST_MESSAGES = 10  # messages to keep after summarization
+KEEP_LAST_MESSAGES = 10       # messages to keep after summarization
 
 MEMORY_SYSTEM_PROMPT = """
 You are an AI assistant that summarizes conversation history.
- 
+
 Rules:
 - Produce a concise factual summary
 - Focus on user intent, decisions, and context
 - Do NOT output JSON
 - Do NOT invent information
 """
-
 
 def pruneOldMessages(
     db: Session,
@@ -43,7 +42,6 @@ def pruneOldMessages(
 
     return deleted
 
-
 def updateMemorySummary(
     db: Session,
     *,
@@ -63,7 +61,9 @@ def updateMemorySummary(
 
     if message_count < MEMORY_SUMMARY_THRESHOLD:
         return False
-    conversationText = "\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
+    conversationText = "\n".join(
+        f"{m.role.upper()}: {m.content}" for m in messages
+    )
 
     prompt = (
         "Summarize the conversation below.\n"
@@ -82,7 +82,11 @@ def updateMemorySummary(
 
     summaryText = llmResult["data"]["answer"]
 
-    existing = db.query(SessionMemorySummary).filter_by(session_id=sessionId).first()
+    existing = (
+        db.query(SessionMemorySummary)
+        .filter_by(session_id=sessionId)
+        .first()
+    )
 
     if existing:
         existing.summary = summaryText

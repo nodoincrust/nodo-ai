@@ -6,10 +6,7 @@ from app.ocr import safe_ocr
 
 
 def extractTextWithOcr(pdfPath: str) -> str:
-    """
-    OCR fallback for scanned PDFs.
-    Returns aggregated text.
-    """
+    # OCR fallback for scanned PDFs.
     texts = []
     for text, _ in iteratePdfPages(pdfPath):
         if text:
@@ -18,10 +15,6 @@ def extractTextWithOcr(pdfPath: str) -> str:
 
 
 def extractPdfText(pdfPath: str) -> Tuple[str, bool]:
-    """
-    Backward-compatible helper.
-    Returns (fullText, ocrUsedAnywhere).
-    """
     texts = []
     ocrUsed = False
 
@@ -38,11 +31,7 @@ def iteratePdfPages(
     dpi: int = 150,
     minTextLength: int = 50,
 ) -> Iterator[Tuple[str, bool]]:
-    """
-    Yield (text, ocrUsed) per page.
-    OCR is used only when extracted text is insufficient.
-    SAFE: never crashes if OCR is unavailable.
-    """
+    """OCR is used only when extracted text is insufficient."""
     document = fitz.open(pdfPath)
 
     for page in document:

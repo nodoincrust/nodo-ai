@@ -16,16 +16,16 @@ from app.models import (
     ChatSession,
     DocumentChunk,
     DocumentVersion,
-    DocumentReview,
     Company,
     DocumentSummary,
     DocumentApprovalStep,
     DocumentWorkflowRun,
-    User,
+    User,ShareDocument
 )
 from app.AIhelpers.chunk_helper import chunkText, createDocumentChunks
 from app.AIhelpers.format_helper import iterateFilePages
 from app.schemas import DocumentSaveSchema
+from app.helpers import build_tracking_timeline,base_shared_query
 
 logger = logging.getLogger(__name__)
 
@@ -92,24 +92,24 @@ def normalize_role_name(r: str):
 
 def compute_display_status(workflow, steps):
 
-    # If workflow missing 
+    # If workflow missing
     if not workflow:
         return "DRAFT"
 
     wf_status = workflow.workflow_status  # version-level lifecycle
 
-    # REJECTED VERSION 
+    # REJECTED VERSION
     if wf_status == "REJECTED":
         rejected_step = next((s for s in steps if s.status == "REJECTED"), None)
         if rejected_step:
             return f"Rejected by {normalize_role_name(rejected_step.approver_type)}"
         return "Rejected"
 
-    # APPROVED VERSION 
+    # APPROVED VERSION
     if wf_status == "COMPLETED":
         return "Approved"
 
-    # IN PROGRESS → Display pending chain 
+    # IN PROGRESS → Display pending chain
     pending_step = next((s for s in steps if s.status == "PENDING"), None)
     if pending_step:
         return f"Pending on {normalize_role_name(pending_step.approver_type)}"
@@ -221,11 +221,11 @@ def processDocument(
 
     except Exception as e:
         db.rollback()
-        logger.exception("Document ingestion failed")
         raise
 
     finally:
         db.close()
+
 
 # Draft + Metadata Save
 def saveDocument(
@@ -244,7 +244,12 @@ def saveDocument(
         raise HTTPException(404, "Document not found")
     if document.uploaded_by != currentUser["user_id"]:
         raise HTTPException(403, "Permission denied")
-    if document.status not in ("DRAFT", "REUPLOADED"):
+
+    if document.status not in (
+        "DRAFT",
+        "REUPLOADED",
+        "SUBMITTED",
+    ):
         raise HTTPException(400, "Only draft documents can be edited")
     version = (
         db.query(DocumentVersion)
@@ -270,7 +275,19 @@ def saveDocument(
     if version_summary:
         version_summary.summary_text = payload.summary or version_summary.summary_text
         version_summary.tags = payload.tags or version_summary.tags or []
-        version_summary.citations = []
+
+        # handle citations safely
+        if hasattr(payload, "citations") and payload.citations is not None:
+            version_summary.citations = payload.citations
+        else:
+            version_summary.citations = version_summary.citations or []
+
+        # handle self-generated flag safely
+        if (
+            hasattr(payload, "is_self_generated")
+            and payload.is_self_generated is not None
+        ):
+            version_summary.is_self_generated = payload.is_self_generated
     else:
         version_summary = DocumentSummary(
             ai_document_id=ai_document.id,
@@ -278,6 +295,11 @@ def saveDocument(
             summary_text=payload.summary or "",
             tags=payload.tags or [],
             citations=[],
+            is_self_generated=(
+                payload.is_self_generated
+                if hasattr(payload, "is_self_generated")
+                else False
+            ),
         )
         db.add(version_summary)
 
@@ -292,6 +314,7 @@ def saveDocument(
         "tags": version_summary.tags,
         "status": document.status,
     }
+
 
 # Draft Create
 def createDocumentDraft(
@@ -366,7 +389,9 @@ def createDocumentDraft(
         "file_path": permanentPath,
     }
 
+
 # FULL DETAILS + Visibility + Workflow
+
 
 def get_document_full_details(
     db: Session,
@@ -477,7 +502,11 @@ def get_document_full_details(
         .order_by(DocumentVersion.version_number.asc())
         .all()
     )
-    return {
+    timeline, timeline_status = build_tracking_timeline(
+        steps, document_status=document.status
+    )
+
+    resp = {
         "document": {
             "id": document.id,
             "status": document.status,
@@ -512,12 +541,20 @@ def get_document_full_details(
             "text": summary_entry.summary_text if summary_entry else None,
             "tags": summary_entry.tags or [] if summary_entry else [],
             "citations": summary_entry.citations or [] if summary_entry else [],
+            "is_self_generated": (
+                summary_entry.is_self_generated if summary_entry else False
+            ),
         },
-        "versions": [{"version": v[0], "created_at": v[1]} for v in versions],
+        "versions": [{"version": v[0], "created_at": v[1]} for v in versions],   
     }
-
-
+    if timeline_status !="DRAFT":
+        resp["tracking"]={
+            "steps":timeline,
+            "final_status":timeline_status
+        }
+    return resp
 # Approve Step
+
 
 def approve_document_step(
     db: Session,
@@ -528,7 +565,7 @@ def approve_document_step(
 ):
     document = (
         db.query(Document)
-        .filter(Document.id == document_id, Document.is_delete == False)
+        .filter(Document.id == document_id, Document.is_delete.is_(False))
         .first()
     )
     if not document:
@@ -614,7 +651,7 @@ def reject_document_step(
 ):
     document = (
         db.query(Document)
-        .filter(Document.id == document_id, Document.is_delete == False)
+        .filter(Document.id == document_id, Document.is_delete.is_(False))
         .first()
     )
     if not document:
@@ -860,7 +897,7 @@ def reupload_document_version(
                 step_order=order,
                 assigned_to=s.assigned_to,
                 approver_type=s.approver_type,
-                status="PENDING"
+                status="PENDING",
             )
         )
         order += 1
@@ -999,6 +1036,7 @@ def reupload_document_version(
 #         "data": data,
 #     }
 
+
 def get_approver_inbox(
     db: Session,
     current_user: dict,
@@ -1010,7 +1048,6 @@ def get_approver_inbox(
     user_id = current_user["user_id"]
     offset = (page - 1) * pagelimit
 
-    # fetch all documents for this company (no status restriction)
     docs = (
         db.query(Document, User)
         .join(User, User.id == Document.uploaded_by)
@@ -1023,7 +1060,6 @@ def get_approver_inbox(
 
     for doc, uploader in docs:
 
-        # -------- FIRST VERSION (identity filename) --------
         first_version = (
             db.query(DocumentVersion)
             .filter(DocumentVersion.document_id == doc.id)
@@ -1033,7 +1069,6 @@ def get_approver_inbox(
         if not first_version:
             continue
 
-        # -------- LATEST VERSION (workflow version) --------
         latest_version = (
             db.query(DocumentVersion)
             .filter(DocumentVersion.document_id == doc.id)
@@ -1043,7 +1078,6 @@ def get_approver_inbox(
         if not latest_version:
             continue
 
-        # -------- FETCH ALL STEPS FOR LATEST VERSION --------
         steps = (
             db.query(DocumentApprovalStep)
             .filter(
@@ -1056,26 +1090,22 @@ def get_approver_inbox(
         if not steps:
             continue
 
-        # -------- FIND MY STEP --------
         my_step = next((s for s in steps if s.assigned_to == user_id), None)
         if not my_step:
-            continue   # user not in this workflow
+            continue
 
-        # -------- SEQUENTIAL BLOCKING LOGIC --------
         previous_steps = [s for s in steps if s.step_order < my_step.step_order]
         blocked = any(s.status != "APPROVED" for s in previous_steps)
 
         if blocked:
-            continue   # cannot view yet (example: company admin before dept head)
+            continue
 
-        viewer_status = my_step.status   # exact PENDING/APPROVED/REJECTED
+        viewer_status = my_step.status
 
-        # -------- SEARCH FILTER --------
         if search:
             if search.lower() not in first_version.file_name.lower():
                 continue
 
-        # -------- STATUS FILTER --------
         if status:
             if viewer_status != status.upper():
                 continue
@@ -1096,8 +1126,7 @@ def get_approver_inbox(
 
     total = len(data)
 
-    # -------- PAGINATION AFTER FILTERING --------
-    paginated = data[offset: offset + pagelimit]
+    paginated = data[offset : offset + pagelimit]
 
     return {
         "statusCode": 200,
@@ -1107,7 +1136,6 @@ def get_approver_inbox(
         "total": total,
         "data": paginated,
     }
-
 
 
 def compute_workflow_view(steps, viewer_id):
@@ -1120,7 +1148,6 @@ def compute_workflow_view(steps, viewer_id):
 
     for s in steps:
         if s.assigned_to == viewer_id:
-            # Current user is the owner of this step
             if s.status == "PENDING":
                 display = "Pending"
                 actionable = True
@@ -1134,7 +1161,6 @@ def compute_workflow_view(steps, viewer_id):
                 display = s.status.title()
                 actionable = False
         else:
-            # Viewer is not the owner of this step
             if s.status == "APPROVED":
                 display = f"Approved by {normalize_role_name(s.approver_type)}"
                 actionable = False

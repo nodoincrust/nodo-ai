@@ -8,10 +8,9 @@ from typing import List, Dict
 logger = logging.getLogger("ai.embedding")
 
 REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)
-
+ 
 EMBED_URL = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
-
 EMBED_DIM = 768
 CACHE_TTL = 86400          # 24 hours
 EMBED_TIMEOUT = 120
@@ -27,15 +26,14 @@ def _cache_key(text: str) -> str:
 def createEmbeddings(texts: List[str]) -> List[List[float]]:
     if not texts:
         return []
-
+ 
     results: List[List[float] | None] = [None] * len(texts)
     missing: List[Dict] = []
-
+ 
     pipe = REDIS.pipeline()
     for t in texts:
         pipe.get(_cache_key(t))
     cached = pipe.execute()
-
     for i, value in enumerate(cached):
         if value:
             results[i] = json.loads(value)
@@ -83,7 +81,7 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
             "model": EMBED_MODEL,
             "prompt": text,
         }
-
+ 
         try:
             response = requests.post(
                 EMBED_URL,

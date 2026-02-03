@@ -1,4 +1,5 @@
 import uuid
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 from sqlalchemy import (
     Column,
     BigInteger,
@@ -13,7 +14,6 @@ from sqlalchemy import (
     CheckConstraint,
     UniqueConstraint,
     JSON,
-    
 )
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.dialects.postgresql import JSONB
@@ -24,7 +24,7 @@ from app.db import Base
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from pgvector.sqlalchemy import Vector
 from app.db import Base
-from app.enum import UserRole
+from app.enum import UserRole,ShareTargetType
 
 
 class User(Base):
@@ -204,7 +204,7 @@ class AIDocument(Base):
     document_id = Column(
         BigInteger, ForeignKey("documents.id"), nullable=False, index=True
     )
-    version_id=Column(BigInteger,nullable=True)
+    version_id = Column(BigInteger, nullable=True)
 
     session_id = Column(
         PG_UUID(as_uuid=True),
@@ -226,7 +226,9 @@ class AIDocument(Base):
         cascade="all, delete-orphan",
     )
 
-    summaries = relationship("DocumentSummary", back_populates="ai_document", lazy="dynamic")
+    summaries = relationship(
+        "DocumentSummary", back_populates="ai_document", lazy="dynamic"
+    )
 
 
 class DocumentChunk(Base):
@@ -262,6 +264,8 @@ class DocumentChunk(Base):
             name="uq_ai_document_chunk_index",
         ),
     )
+
+
 class DocumentSummary(Base):
     __tablename__ = "document_summaries"
 
@@ -285,6 +289,7 @@ class DocumentSummary(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     ai_document = relationship("AIDocument", back_populates="summaries")
+    is_self_generated = Column(Boolean, default=False)
 
 
 class SessionMessage(Base):
@@ -421,13 +426,12 @@ class DocumentWorkflowRun(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-
 class Bouquet(Base):
     __tablename__ = "bouquets"
- 
+
     id = Column(BigInteger, primary_key=True, index=True)
- 
-    name = Column(String, nullable=False)
+
+    name = Column(String, nullable=False, unique=True)
     description = Column(Text)
     documentsInBouquet = Column(
         "documents_in_bouquet",
@@ -435,9 +439,108 @@ class Bouquet(Base):
         nullable=False,
         default=list,
     )
- 
+
     isActive = Column("is_active", Boolean, default=True)
     isDelete = Column("is_delete", Boolean, default=False)
- 
+
     createdBy = Column("created_by", Integer, nullable=False)
     updatedAt = Column("updated_at", DateTime)
+
+
+class Designation(Base):
+    __tablename__ = "designation"
+    id = Column(BigInteger, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+
+class ShareDocument(Base):
+    __tablename__="shared_target"
+    id = Column(BigInteger,primary_key=True,index=True,autoincrement=True)
+    
+    document_id=Column(BigInteger,ForeignKey("documents.id"),nullable=True)
+    bouquet_id=Column(BigInteger,ForeignKey("bouquets.id"),nullable=True)
+    template_id = Column(BigInteger, nullable=True)  
+    
+    shared_by=Column(BigInteger,ForeignKey("users.id"),nullable=False)
+    
+    target_type=Column(PGEnum(
+        ShareTargetType,
+        name="share_target_type",
+        create_type=False
+    ),
+     nullable=False)                  
+    target_id=Column(BigInteger,nullable=True)
+    
+    expires_at=Column(DateTime,nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_revoked = Column(Boolean, default=False)
+    
+class FormTemplate(Base):
+    __tablename__="form_templates"
+    
+    id = Column(BigInteger,primary_key=True,index=True)
+    template_name = Column(String(255),nullable=False)
+    
+    created_by=Column(
+        BigInteger,
+        ForeignKey("users.id",ondelete="RESTRICT"),
+        nullable=False
+    )
+    
+    created_at=Column(DateTime,default=datetime.now())
+    updated_at=Column(DateTime,default=datetime.now())
+    
+    fields = relationship(
+        "FormField",
+        back_populates="template",
+        cascade="all,delete-orphan"
+    )
+    
+class FormField(Base):
+    __tablename__ = "form_fields"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+
+    template_id = Column(
+        BigInteger,
+        ForeignKey("form_templates.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    type = Column(String(50), nullable=False)
+    label = Column(String(255), nullable=False)
+    placeholder = Column(String(255), nullable=True)
+    required = Column(Boolean, default=False)
+    field_order = Column(Integer, nullable=False)
+
+    options = Column(JSON, nullable=True)
+    errmsg = Column(String(255),nullable=True)
+    classname = Column(String(255),nullable=True)
+    allowedfiletypes = Column(String(255), nullable=True)   
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    template = relationship(
+        "FormTemplate",
+        back_populates="fields"
+    )
+    
+class TemplateSubmission(Base):
+    __tablename__ = "template_submissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    template_id = Column(
+        Integer,
+        ForeignKey("form_templates.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    submitted_by = Column(Integer, nullable=False)
+
+    response_json = Column(JSONB, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    
+    
+   

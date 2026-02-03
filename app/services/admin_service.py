@@ -11,9 +11,11 @@ from app.models import (
     Company,
     Department,
     RoleSidebarMapping,
-    SidebarMenu,DocumentVersion,Document
+    SidebarMenu,
+    DocumentVersion,
+    Document,
 )
-from app.enum import UserRole, SIDEBAR_MENU
+from app.enum import UserRole
 from app.schemas import CreateCompanySchema, UpdateCompanySchema
 from app.helpers import (
     otp_generate,
@@ -30,31 +32,41 @@ from jose import jwt
 
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-print("JWT_SECRET =", os.getenv("JWT_SECRET"))
 expire = datetime.utcnow() + timedelta(weeks=1)
 if not SECRET_KEY:
     raise RuntimeError("JWT_SECRET is not set")
 
 logger = logging.getLogger(__name__)
 
+#below function is to send otp via email and for that first we check if user exist based on email if yes then we grant him access 
 def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Session):
-    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
-
+    user = db.query(User).filter(User.email == email, User.is_delete.is_(False)).first()
     if not user:
-        raise HTTPException(status_code=404, detail="The provided credentials do not correspond to any registered user.")
+        raise HTTPException(
+            status_code=404,
+            detail="The provided credentials do not correspond to any registered user.",
+        )
+    if not user.is_active: # this check is for if user is inactive and try to login then it will throw this exception 
+        raise HTTPException(
+            status_code=404,
+            detail="Access has been disabled. Please contact your company Admin."
+        )
+        
     try:
         db.query(OTPLogin).filter(
             OTPLogin.user_id == user.id, OTPLogin.is_used.is_(False)
         ).update({"is_used": True})
 
-        # otp = otp_generate()
+        # otp = otp_generate() # here we generate random otp 
         otp = 1234
-
+        
+        # here we store generated otp into db with expiry
         otp_entry = OTPLogin(user_id=user.id, otp_code=otp, expires_at=otp_expiry())
 
         db.add(otp_entry)
         db.commit()
 
+        #this is for email sending as SMTP is Third party api and it takes time to send email so we put it into background task 
         background_tasks.add_task(send_otp_email, email, otp)
 
         return {"statusCode": 200, "message": "OTP sent successfully"}
@@ -87,12 +99,15 @@ def get_sidebar_for_user(db: Session, role: str):
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to load sidebar menus")
 
-
+# this function is for verify otp it verifies otp based on db entry it takes email 
+# to fetch otp and compares the request otp and db otp is same if it matches then it will return token,sidebarmenu,info etc
 def verify_otp_service(email: str, otp: str, db: Session):
     user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
-    print(user.__dict__)
     if not user:
-        raise HTTPException(status_code=404, detail="The provided credentials do not correspond to any registered user.")
+        raise HTTPException(
+            status_code=404,
+            detail="The provided credentials do not correspond to any registered user.",
+        )
 
     otp_entry = (
         db.query(OTPLogin)
@@ -105,7 +120,6 @@ def verify_otp_service(email: str, otp: str, db: Session):
         .order_by(OTPLogin.created_at.desc())
         .first()
     )
-    
 
     if not otp_entry:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
@@ -115,8 +129,6 @@ def verify_otp_service(email: str, otp: str, db: Session):
         db.commit()
 
         department = None
-        print("department", user.department_id)
-        print("company", user.company_id)
         if user.department_id:
             department = (
                 db.query(Department)
@@ -134,7 +146,7 @@ def verify_otp_service(email: str, otp: str, db: Session):
         )
 
         expire = datetime.utcnow() + timedelta(days=7)
-        print("department", department)
+        # expire = datetime.utcnow() + timedelta(minutes=2)
         payload = {
             "user_id": user.id,
             "company_id": user.company_id,
@@ -145,52 +157,44 @@ def verify_otp_service(email: str, otp: str, db: Session):
             "is_department_head": is_department_head,
             "department_id": department.id if department else None,
         }
-
         token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
         ui_role = resolve_ui_role(payload)
         sidebar = get_sidebar_for_user(db, ui_role)
         # static implemetation
-        storage= {"is_storage_show":False}
-        
-        company=(
-            db.query(Company)
-            .filter(
-                Company.id==user.company_id,
-                Company.is_delete.is_(False)
-            ).first()
-        )
-        
-        if company and user.role.value in["COMPANY_ADMIN","EMPLOYEE"]:
-            total_space=float(bytes_to_gb(company.total_space)) or 0
-            used_space_bytes =(
-                db.query(func.sum(DocumentVersion.file_size_bytes))
-                .join(Document,Document.id==DocumentVersion.document_id)
-                .filter(
-                    Document.company_id==user.company_id,
-                    Document.is_delete.is_(False),
-                
-                )
-                .scalar() or 0
-            )
-           
-            used_space_mb= float(bytes_to_gb(used_space_bytes))
-            print("total_space =", total_space, type(total_space))
-            print("used_space_mb =", used_space_mb, type(used_space_mb))
+        storage = {"is_storage_show": False}
 
-            remaining_space= max(total_space-used_space_mb,0)
-            print("reached",remaining_space)
-            used_percentage=(
-                round((used_space_mb/total_space)*100,2) if total_space > 0 else 0
+        company = (
+            db.query(Company)
+            .filter(Company.id == user.company_id, Company.is_delete.is_(False))
+            .first()
+        )
+
+        if company and user.role.value in ["COMPANY_ADMIN", "EMPLOYEE"]:
+            total_space = company.total_space
+            used_space_bytes = (
+                db.query(func.sum(DocumentVersion.file_size_bytes))
+                .join(Document, Document.id == DocumentVersion.document_id)
+                .filter(
+                    Document.company_id == user.company_id,
+                    Document.is_delete.is_(False),
+                )
+                .scalar()
             )
-           
-            storage={
-                "is_storage_show":True,
-                "total_space":total_space,
-                "used_space":used_space_mb,
-                "remaining_space":remaining_space,
-                "used_percentage":used_percentage,
-                
+
+            used_space_mb = float(bytes_to_gb(used_space_bytes))
+
+            remaining_space = max(total_space - used_space_mb, 0)
+            used_percentage = (
+                round((used_space_mb / total_space) * 100, 2) if total_space > 0 else 0
+            )
+
+            storage = {
+                "is_storage_show": True,
+                "total_space": total_space,
+                "used_space": used_space_mb,
+                "remaining_space": remaining_space,
+                "used_percentage": used_percentage,
             }
         return {
             "statusCode": 200,
@@ -367,6 +371,7 @@ def updateStatusCompany(companyId: int, is_active: bool, db: Session, user: dict
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update company status")
 
+
 def delete_company_service(companyId: int, db: Session, user: dict):
     company = (
         db.query(Company)
@@ -389,27 +394,24 @@ def delete_company_service(companyId: int, db: Session, user: dict):
 
         # Cascade delete departments
         db.query(Department).filter(
-            Department.company_id == company.id,
-            Department.is_delete.is_(False)
+            Department.company_id == company.id, Department.is_delete.is_(False)
         ).update(
             {
                 "is_delete": True,
                 "is_active": False,
             },
-            synchronize_session=False
+            synchronize_session=False,
         )
 
         # Cascade delete users
         db.query(User).filter(
-            User.company_id == company.id,
-            User.is_delete.is_(False)
+            User.company_id == company.id, User.is_delete.is_(False)
         ).update(
             {
                 "is_delete": True,
                 "is_active": False,
-                
             },
-            synchronize_session=False
+            synchronize_session=False,
         )
 
         db.commit()
@@ -420,6 +422,7 @@ def delete_company_service(companyId: int, db: Session, user: dict):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete company")
+
 
 def update_company_details(
     companyId: int, payload: UpdateCompanySchema, db: Session, user: dict
@@ -482,34 +485,30 @@ def update_company_details(
                         Document.company_id == company.id,
                         Document.is_delete.is_(False),
                     )
-                    .scalar() or 0
+                    .scalar()
+                    or 0
                 )
-                print("used_space",used_space)
-                used_spacet=bytes_to_gb(used_space)
-                print("used_spacet",used_spacet)
+                used_spacet = bytes_to_gb(used_space)
             # Optional rule to prevent reducing total_space < used_space
             if payload.total_space < used_spacet:
-             
+
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot reduce total space below used space. Used: {used_space}, New Total: {payload.total_space}",
                 )
 
             company.remaining_space = payload.total_space - used_spacet
-         
 
         # ---- ACTIVE STATUS CASCADE ----
         if payload.is_active is not None:
-           
+
             company.is_active = payload.is_active
 
-         
             db.query(Department).filter(
                 Department.company_id == company.id,
                 Department.is_delete.is_(False),
             ).update({"is_active": payload.is_active})
 
-          
             db.query(User).filter(
                 User.company_id == company.id,
                 User.is_delete.is_(False),
@@ -517,7 +516,7 @@ def update_company_details(
 
         # ---- ADMIN PERSON / EMAIL ----
         if payload.contact_person is not None:
-          
+
             company.contact_person = payload.contact_person
             company_admin.name = payload.contact_person
 

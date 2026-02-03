@@ -34,4 +34,4 @@ def saveDocumentFile(
     with open(filePath, "wb") as file:
         file.write(uploadFile.file.read())                         # Writes uploaded file to disk
 
-    return filePath                                                # Returns absolute file path
+    return filePath

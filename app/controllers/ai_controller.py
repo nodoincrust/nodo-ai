@@ -1,17 +1,20 @@
 # app/controllers/ai_controller.py
 
-from fastapi import APIRouter, Depends, HTTPException, Path
-from fastapi.params import Query
+from fastapi import APIRouter, Depends, HTTPException, Path,Query
 from sqlalchemy.orm import Session
 from uuid import uuid4
 from threading import Thread
 import logging
 
-from typing import Optional
 from app.helpers import get_db, run_summary_job
 from app.models import Document, DocumentVersion, AIDocument
-from app.services.ai_DBservice import getOrCreateSessionForDocument, createAIDocumentForVersion, createChunksForExistingAIDocument
-from app.services.chat_service import chatWithDocument, fetchChatHistory
+from app.services.ai_db_service import (
+    getOrCreateSessionForDocument,
+    createAIDocumentForVersion,
+    createChunksForExistingAIDocument
+)
+from app.services.chat_service import fetchChatHistory
+from app.services.chat_service import chatWithDocument
 from jobs_store import jobs
 
 router = APIRouter(prefix="/nodo/ai", tags=["AI Features"])
@@ -73,22 +76,40 @@ def start_summary(
                 document_id=documentId,
                 version_id=version_id,
                 filename=version.file_name,
-                file_type=version.file_name.split('.')[-1] if '.' in version.file_name else 'pdf',
-                file_size_mb=version.file_size_bytes / (1024 * 1024) if version.file_size_bytes else 0.0,
+                file_type=(
+                    version.file_name.split(".")[-1]
+                    if "." in version.file_name
+                    else "pdf"
+                ),
+                file_size_mb=(
+                    version.file_size_bytes / (1024 * 1024)
+                    if version.file_size_bytes
+                    else 0.0
+                ),
             )
-            
+
             # Create chunks
             chunk_result = createChunksForExistingAIDocument(
                 documentId=documentId,
                 versionId=version_id,
                 filePath=version.file_path,
                 filename=version.file_name,
-                fileType=version.file_name.split('.')[-1] if '.' in version.file_name else 'pdf',
-                fileSizeMb=version.file_size_bytes / (1024 * 1024) if version.file_size_bytes else 0.0,
+                fileType=(
+                    version.file_name.split(".")[-1]
+                    if "." in version.file_name
+                    else "pdf"
+                ),
+                fileSizeMb=(
+                    version.file_size_bytes / (1024 * 1024)
+                    if version.file_size_bytes
+                    else 0.0
+                ),
             )
-            
+
             if chunk_result.get("status") != "success":
-                raise HTTPException(500, f"Failed to process document: {chunk_result.get('message')}")
+                raise HTTPException(
+                    500, f"Failed to process document: {chunk_result.get('message')}"
+                )
         else:
             raise
 
@@ -125,9 +146,9 @@ def get_status(job_id: str):
 @router.get("/chat/history/{documentId}")
 def get_chat_history(
     documentId: int,
-    version: int = Query(..., description="AI document version"),
+   
 ):
     return fetchChatHistory(
         documentId=documentId,
-        version=version,
+       
     )

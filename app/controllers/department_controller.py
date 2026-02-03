@@ -1,14 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from app.services.Companyservice import (
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from app.services.company_service import (
     add_employee_service,
     update_employee_service,
     delete_employee_details,
-    get_employee_list,
+    get_employee_list,get_deptwise_employee
 )
 from app.db import SessionLocal
 from app.schemas import (
     CreateEmployeeSchema,
     UpdateEmployeeSchema,
+    getdeptEmployee
 )
 from sqlalchemy.orm import Session
 from app.helpers import get_current_user
@@ -75,3 +76,12 @@ def Emp_List(
     return get_employee_list(
         db=db, current_user=current_user, page=page, size=size, query=query
     )
+    
+    
+    
+@router.post("/getDeptEmployees")
+def get_dept_employee(
+    payload:getdeptEmployee,
+    db: Session = Depends(get_db),
+):
+    return get_deptwise_employee(db, payload.department_id,payload.search)

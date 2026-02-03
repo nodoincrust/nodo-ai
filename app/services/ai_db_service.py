@@ -1,12 +1,11 @@
 from typing import Optional, List, Tuple
 from datetime import datetime, timezone
 import uuid
-from app.AIhelpers.format_helper import iterateFilePages
-from app.AIhelpers.chunk_helper import createDocumentChunks
-from app.db import SessionLocal
-    
+
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+
+from app.db import SessionLocal
 from app.models import (
     AIDocument,
     DocumentChunk,
@@ -16,15 +15,22 @@ from app.models import (
     SessionMemorySummary,
 )
 
+# ai_DBservice.py (full corrected version)
+
+from typing import Optional
+import uuid
+from sqlalchemy.orm import Session
+from app.db import SessionLocal
+from app.models import AIDocument, ChatSession
+
+
 def getOrCreateSessionForDocument(
     document_id: int,
     version_id: Optional[int] = None,
 ) -> str:
     db: Session = SessionLocal()
     try:
-        query = db.query(AIDocument).filter(
-            AIDocument.document_id == document_id
-        )
+        query = db.query(AIDocument).filter(AIDocument.document_id == document_id)
 
         if version_id is not None:
             query = query.filter(AIDocument.version_id == version_id)
@@ -52,7 +58,8 @@ def getOrCreateSessionForDocument(
 
     finally:
         db.close()
-        
+
+
 def createChunksForExistingAIDocument(
     documentId: int,
     versionId: int,
@@ -61,12 +68,21 @@ def createChunksForExistingAIDocument(
     fileType: str,
     fileSizeMb: float,
 ) -> dict:
-    
+    """
+    Create chunks for an existing AIDocument without recreating sessions.
+    This avoids the session conflict issues in processDocument.
+    """
+    from app.AIhelpers.format_helper import iterateFilePages
+    from app.AIhelpers.chunk_helper import createDocumentChunks
+    from app.db import SessionLocal
+    from app.models import AIDocument
+    import os
+
     db: Session = SessionLocal()
     ocrUsed = False
     chunksCreated = 0
     lastChunkIndex = 0
-    
+
     try:
         # Get existing AIDocument
         aiDocument = (
@@ -77,19 +93,19 @@ def createChunksForExistingAIDocument(
             )
             .first()
         )
-        
+
         if not aiDocument:
             return {
                 "status": "error",
-                "message": f"AIDocument not found for documentId={documentId}, versionId={versionId}"
+                "message": f"AIDocument not found for documentId={documentId}, versionId={versionId}",
             }
-        
+
         if not aiDocument.session_id:
             return {
                 "status": "error",
-                "message": f"AIDocument has no session_id for documentId={documentId}, versionId={versionId}"
+                "message": f"AIDocument has no session_id for documentId={documentId}, versionId={versionId}",
             }
-        
+
         # Create chunks
         for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
             if not rawText or not rawText.strip():
@@ -120,13 +136,11 @@ def createChunksForExistingAIDocument(
 
     except Exception as e:
         db.rollback()
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
     finally:
         db.close()
-        
+
+
 def createAIDocumentForVersion(
     document_id: int,
     version_id: int,
@@ -141,10 +155,14 @@ def createAIDocumentForVersion(
     db: Session = SessionLocal()
     try:
         # Check if AIDocument already exists
-        ai_doc = db.query(AIDocument).filter(
-            AIDocument.document_id == document_id,
-            AIDocument.version_id == version_id,
-        ).first()
+        ai_doc = (
+            db.query(AIDocument)
+            .filter(
+                AIDocument.document_id == document_id,
+                AIDocument.version_id == version_id,
+            )
+            .first()
+        )
 
         if ai_doc:
             if ai_doc.session_id:
@@ -177,7 +195,8 @@ def createAIDocumentForVersion(
 
     finally:
         db.close()
-        
+
+
 def storeDocumentChunk(
     db: Session,
     *,
@@ -312,9 +331,7 @@ def getMessageCount(
     sessionId: str,
 ) -> int:
     return (
-        db.query(func.count(SessionMessage.id))
-        .filter_by(session_id=sessionId)
-        .scalar()
+        db.query(func.count(SessionMessage.id)).filter_by(session_id=sessionId).scalar()
     )
 
 

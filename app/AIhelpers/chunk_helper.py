@@ -40,8 +40,8 @@ def chunkText(
         chunks.append(" ".join(current_chunk))
 
     return chunks
-
-
+ 
+ 
 def chunkTextFromPages(
     pages,
     chunkSize: int = 1024,
@@ -70,7 +70,7 @@ def chunkTextFromPages(
 
         wordBuffer.extend(words)
         pageBuffer.extend([pageNumber] * len(words))
-
+ 
         while len(wordBuffer) >= chunkSize:
             chunk_text = " ".join(wordBuffer[:chunkSize]).strip()
             if chunk_text:
@@ -81,7 +81,7 @@ def chunkTextFromPages(
 
             wordBuffer = wordBuffer[chunkSize - overlap :]
             pageBuffer = pageBuffer[chunkSize - overlap :]
-
+ 
     if wordBuffer:
         chunk_text = " ".join(wordBuffer).strip()
         if chunk_text:

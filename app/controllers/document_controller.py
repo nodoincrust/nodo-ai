@@ -1,13 +1,43 @@
-from fastapi import APIRouter, Request, UploadFile, File, Depends, HTTPException, BackgroundTasks,Form,Body
+import json
+from typing import List
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    Depends,
+    HTTPException,
+    BackgroundTasks,
+    Form,
+    Request,
+    Body,
+    
+)
+import uuid
 from fastapi.responses import FileResponse
-from requests import request
+from pdf2docx import Converter
 from sqlalchemy.orm import Session
 import shutil
 import tempfile
 import os
 from app.models import Document
-from app.helpers import FILE_TOKEN_STORE, get_db, get_current_user
-from app.schemas import DocumentSaveSchema,GetApprovalDocumentList
+from app.helpers import get_db, get_current_user
+from app.schemas import (
+    DocumentSaveSchema,
+    GetApprovalDocumentList,
+    createBouquetSchema,
+    BoqFilter,
+    DocFilter,
+    updateBouquet,
+    AppendDocumentsSchema,
+    BoqDocsFilter,
+    RemoveDocumentsSchema,
+    ShareRequest,
+    SharedDocViewRequest,
+    FormTemplateCreate,
+    getTemplate,
+    templateResponse
+    
+)
 from app.services.document_service import (
     details_editor,
     processDocument,
@@ -16,14 +46,32 @@ from app.services.document_service import (
     get_document_full_details,
     approve_document_step,
     reject_document_step,
-    reupload_document_version,get_approver_inbox,
+    reupload_document_version,
+    get_approver_inbox,
+    
+    
 )
-from app.services.BouquetService import(
-    createBouquet,getBouquetById,appendDocumentToBouquet,removeDocumentFromBouquet,deleteBouquet,getAllBoqList
+from app.services.bouquet_service import (
+    createBouquet,
+    getBouquetById,
+    removeDocumentFromBouquet,
+    deleteBouquet,
+    getAllBoqList,
+    get_approved_documents_service,
+    update_boq_details,
+    append_documents_to_bouquet,
+    get_bouquet_documents_service,
+    createTemplate,
+    get_templates_list,
+    get_templates_feilds,
+    delete_templates_service,
+    submit_template_form,
+    fetch_template_submissions,
+    get_template_response_user
+    
 )
-import logging
-logger = logging.getLogger("document.controller")
- 
+from app.services.document_sharing import  share_docboq_service,list_shared_bouquets,list_shared_documents,list_shared_templates
+
 router = APIRouter(prefix="/nodo/newdocuments")
  
  
@@ -36,7 +84,7 @@ def greet():
 async def uploadDocument(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    documentId: int | None = Form(None),   # <--- ADDED
+    documentId: int | None = Form(None),  # <--- ADDED
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
@@ -54,11 +102,12 @@ async def uploadDocument(
  
     # === REUPLOAD CASE ===
     if documentId:
-        document = db.query(Document).filter(
-            Document.id == documentId,
-            Document.is_delete.is_(False)
-        ).first()
- 
+        document = (
+            db.query(Document)
+            .filter(Document.id == documentId, Document.is_delete.is_(False))
+            .first()
+        )
+
         if document and document.status == "REJECTED":
             newVersion = reupload_document_version(
                 db=db,
@@ -84,7 +133,7 @@ async def uploadDocument(
                 "documentId": document.id,
                 "version": newVersion["version"],
                 "version_id": newVersion["version_id"],
-                "filepath": newVersion["file_path"]
+                "filepath": newVersion["file_path"],
             }
  
     # === NORMAL NEW DOCUMENT FLOW ===
@@ -188,12 +237,12 @@ def approve_document(
 @router.post("/reject/{document_id}")
 def reject_document(
     document_id: int,
-    payload:dict,
+    payload: dict,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     remarks = payload.get("reason") if payload else None
-    print("remarks-----------",remarks)
+    print("remarks-----------", remarks)
     result = reject_document_step(
         db=db,
         document_id=document_id,
@@ -262,177 +311,292 @@ async def reupload_document(
         "statusCode": 200,
         "message": result["message"],
     }
- 
- 
- 
+
+
 @router.post("/approver/inbox")
 def approver_inbox(
-    payload:GetApprovalDocumentList,
+    payload: GetApprovalDocumentList,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    print("asdfghjkl",payload.dict())
+    print("asdfghjkl", payload.dict())
     return get_approver_inbox(
         db=db,
         current_user=current_user,
         search=payload.search,
         status=payload.status,
         page=payload.page,
-        pagelimit=payload.pagelimit
+        pagelimit=payload.pagelimit,
     )
- 
- 
- 
-@router.post("/bouquets")
+
+
+@router.post("/createBouquet")
 def createBouquetEndpoint(
-    payload: dict = Body(...),
+    payload: createBouquetSchema,
     db: Session = Depends(get_db),
-    currentUser: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
-    name = payload.get("name")
-    description = payload.get("description")
- 
-    if not name:
-        raise HTTPException(400, "name is required")
- 
-    bouquet = createBouquet(
+    return createBouquet(
         db=db,
-        name=name,
-        description=description,
-        createdBy=currentUser["user_id"],
+        name=payload.name,
+        description=payload.description,
+        current_user=current_user,
     )
- 
-    return {
-        "id": bouquet.id,
-        "message": "Bouquet created successfully",
-    }
- 
-@router.get("/getAllBoq")
-def getAllBoq( db: Session = Depends(get_db),currentUser: dict = Depends(get_current_user)):
-   
-    result= getAllBoqList(db=db,current_user=currentUser)
-   
-    if not result:
-        raise HTTPException("Boq not found")
-    else:
-        return result
-   
-   
+
+
+@router.post("/getAllBoq")
+def getAllBoq(
+    filters: BoqFilter,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return getAllBoqList(db=db, current_user=current_user, filters=filters)
+
+
+@router.post("/updateBouquet/{bouquetId}")
+def update_bouquet(
+    bouquetId: int,
+    payload: updateBouquet,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return update_boq_details(
+        db=db, current_user=current_user, payload=payload, bouquetId=bouquetId
+    )
+
+
 @router.get("/bouquets/{bouquetId}")
 def getBouquet(
     bouquetId: int,
     db: Session = Depends(get_db),
 ):
     result = getBouquetById(db, bouquetId)
- 
+
     if not result:
         raise HTTPException(404, "Bouquet not found")
- 
+
     return result
- 
- 
-@router.delete("/bouquets/{bouquetId}")
+
+
+@router.delete("/deleteBouquet/{bouquetId}")
 def deleteBouquetEndpoint(
     bouquetId: int,
     db: Session = Depends(get_db),
-    currentUser: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
-    deleteBouquet(
+    return deleteBouquet(
         db=db,
         bouquetId=bouquetId,
-        currentUserId=currentUser["user_id"],
+        current_user=current_user,
     )
-    return {"message": "Bouquet deleted successfully"}
- 
- 
-@router.post("/bouquets/{bouquetId}/appendDocument")
-def appendDocument(
+
+
+@router.post("/boqDocuments/{bouquetId}")
+def get_bouquet_documents(
     bouquetId: int,
-    payload: dict = Body(...),
+    filters: BoqDocsFilter,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return get_bouquet_documents_service(
+        db=db, current_user=current_user, bouquetId=bouquetId, filters=filters
+    )
+
+
+@router.post("/appendDocuments/{bouquetId}")
+def append_documents(
+    bouquetId: int,
+    payload: AppendDocumentsSchema,
     db: Session = Depends(get_db),
 ):
-    documentId = payload.get("documentId")
- 
-    if not documentId:
-        raise HTTPException(400, "documentId is required")
- 
-    appendDocumentToBouquet(
-        db=db,
-        bouquetId=bouquetId,
-        documentId=documentId,
+    return append_documents_to_bouquet(
+        db=db, bouquetId=bouquetId, documentIds=payload.documentIds
     )
- 
-    return {"message": "Document appended to bouquet successfully"}
- 
- 
-@router.delete("/bouquets/{bouquetId}/removeDocument")
-def removeDocument(
+
+
+@router.delete("/removeDocuments/{bouquetId}")
+def remove_documents(
     bouquetId: int,
-    payload: dict = Body(...),
+    payload: RemoveDocumentsSchema,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    documentId = payload.get("documentId")
- 
-    if not documentId:
-        raise HTTPException(400, "documentId is required")
- 
-    removeDocumentFromBouquet(
+    return removeDocumentFromBouquet(
         db=db,
+        current_user=current_user,
         bouquetId=bouquetId,
-        documentId=documentId,
+        document_id=payload.documentId,
     )
- 
-    return {"message": "Document removed from bouquet successfully"}
 
-@router.api_route("/internal/onlyoffice/file/{token}", methods=["GET", "POST", "HEAD"])
-def stream_file_by_token(token: str):
-    logger.info(f"Request received for token: {token}, method: {request.method}")  # *** ADD: Log the request method ***
-    meta = FILE_TOKEN_STORE.get(token)
-    if not meta:
-        logger.warning(f"Invalid token: {token}")  # *** ADD: Log invalid token ***
-        raise HTTPException(status_code=403)
 
-    file_path = meta["file_path"].lstrip("/")
+@router.post("/getApprovedDocs")
+def get_approved_documents(
+    filters: DocFilter,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    return get_approved_documents_service(
+        db=db, current_user=current_user, filters=filters
+    )
 
-    if not os.path.exists(file_path):
-        logger.error(f"File not found: {file_path}")  # *** ADD: Log missing file ***
-        raise HTTPException(status_code=404)
 
-    logger.info(f"Serving file: {file_path}")  # *** ADD: Log successful serve ***
+
+@router.post("/convert")
+async def convert_pdf_to_docx(file: UploadFile = File(...)):
+
+    # use python temp dir (works win/linux)
+    tmp_dir = tempfile.gettempdir()
+
+    input_path = os.path.join(tmp_dir, f"{uuid.uuid4()}.pdf")
+    output_path = input_path.replace(".pdf", ".docx")
+
+    # save uploaded file
+    with open(input_path, "wb") as f:
+        f.write(await file.read())
+
+    # convert
+    cv = Converter(input_path)
+    cv.convert(output_path, start=0, end=None)
+    cv.close()
+
+    # return response
     return FileResponse(
-        path=file_path,
-        filename=os.path.basename(file_path),
-        media_type="application/octet-stream",
-        headers={
-            "Cache-Control": "no-store",
-            "Content-Disposition": f'attachment; filename="{os.path.basename(file_path)}"',
-        }
+        path=output_path,
+        filename=file.filename.replace(".pdf", ".docx"),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+
+@router.post("/share")
+def share(payload:ShareRequest,
+          db:Session=Depends(get_db),
+          current_user=Depends(get_current_user)):
+    
+    return share_docboq_service(db,current_user,payload)
+
+@router.post("/sharedDocument")
+def get_shared_documents(
+    payload: SharedDocViewRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+
+    if payload.key not in ["doc", "boq", "template"]:
+        raise HTTPException(
+            status_code=400,
+            detail="key must be in 'doc', 'boq' or 'template'"
+        )
+
+    if payload.order not in ["asc", "desc"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Order must be in 'asc' or 'desc'"
+        )
+
+    if payload.key == "doc":
+        return list_shared_documents(db, current_user, payload)
+
+    if payload.key == "boq":
+        return list_shared_bouquets(
+            db,
+            current_user,
+            payload.page,
+            payload.pagelimit,
+            payload.query,
+            payload.sort,
+            payload.order
+        )
+
+    if payload.key == "template":
+        return list_shared_templates(db, current_user, payload)
+
+
+@router.post("/savetemplate")
+def save_template(
+    payload:FormTemplateCreate,
+    db:Session = Depends(get_db),
+    current_user:dict = Depends(get_current_user)
+):
+    return createTemplate(db=db,payload=payload,current_user=current_user)
+
+
+@router.post("/templates")
+def get_templates(payload:getTemplate,db:Session = Depends(get_db), 
+                  current_user:dict =Depends(get_current_user)                  
+                  ):
+                    return get_templates_list(db,current_user=current_user,payload=payload)
+    
+
+@router.post("/templatesFeilds/{template_id}")
+def get_templatesFeilds(template_id:int,db:Session= Depends(get_db),current_user:dict=Depends(get_current_user)):
+    
+    return get_templates_feilds(db,current_user=current_user,template_id=template_id)
+
+@router.delete("/deleteTemplate/{templateID}")
+def delete_template(templateID:int,db:Session=Depends(get_db),current_user:dict=Depends(get_current_user)):
+    
+    return delete_templates_service(db,current_user=current_user,templateID=templateID)
+
+
+@router.post("/submitTemplateForm")
+def submit_template(
+    payload: str = Form(...),
+    files: List[UploadFile] = File([]),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    payload_dict = json.loads(payload)
+
+    return submit_template_form(
+        db=db,
+        payload=payload_dict,
+        files=files,
+        current_user=current_user
+    )
+
+@router.get("/submissions/{template_id}")
+def get_template_submission(template_id:int,db:Session=Depends(get_db),current_user:dict=Depends(get_current_user)):
+    return fetch_template_submissions(
+        db=db,
+        template_id=template_id,
+        current_user=current_user
+    )
+    
+@router.post("/templates/submissions/filledvalues")
+def get_template_response(
+    payload: templateResponse,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    return get_template_response_user(
+        db=db,
+        template_id=payload.template_id,
+        submitted_by=payload.submitted_by,
+        current_user=current_user
     )
 
 @router.post("/onlyoffice/callback/{document_id}")
 async def onlyoffice_callback(document_id: int, request: Request):
     body = await request.json()
-    logger.info(f"OnlyOffice callback for doc {document_id}: {body}")
-    
+   
     status = body.get("status")
     if status == 2:
-        changed_url = body.get("url")
         return {"error": 0}  # Success response to OnlyOffice
-    
+   
     return {"error": 0}  # Acknowledge
-
+ 
 @router.api_route("/internal/onlyoffice/storage/{full_path:path}", methods=["GET", "HEAD"])
 def onlyoffice_stream(full_path: str):
-    
+   
     safe_root = os.path.abspath("storage")
     abs_path = os.path.abspath(os.path.join("storage", full_path.replace("storage/", "")))
-
+ 
     if not abs_path.startswith(safe_root):
         raise HTTPException(status_code=403, detail="Invalid path")
-
+ 
     if not os.path.exists(abs_path):
         raise HTTPException(status_code=404, detail="File not found")
-
+ 
     return FileResponse(
         path=abs_path,
         filename=os.path.basename(abs_path),
@@ -442,3 +606,4 @@ def onlyoffice_stream(full_path: str):
             "Cache-Control": "no-cache",
         },
     )
+ 

@@ -1,8 +1,9 @@
 from typing import List
 from sqlalchemy.orm import Session
-from app.AIhelpers.ai_helper import askLlmWithMemory
+
+# from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
-from app.services.ai_DBservice import getOrCreateSessionForDocument
+from app.services.ai_db_service import getOrCreateSessionForDocument
 import logging
 
 from app.db import SessionLocal
@@ -10,9 +11,8 @@ from app.models import (
     AIDocument,
     DocumentChunk,
     DocumentSummary,
-    DocumentVersion,
     SessionMessage,
-    SessionMemorySummary,
+    SessionMemorySummary,DocumentVersion
 )
 from app.AIhelpers.embedding_helper import createEmbedding
 from app.AIhelpers.llm_helper import askLlm
@@ -20,12 +20,14 @@ from app.services.background_tasks import submitMemoryUpdate
 
 logger = logging.getLogger("ai.chatHistoryService")
 
-TOP_K = 20               # number of chunks to retrieve
-MAX_CHAT_HISTORY = 15    # recent messages only
+TOP_K = 20  # number of chunks to retrieve
+MAX_CHAT_HISTORY = 15  # recent messages only
 
 CHAT_SYSTEM_PROMPT = """
-You are a document-grounded AI assistant.
-
+You are a document-grounded AI ASSISTANT.
+when anyone can request about your information then you can simply return 
+My name is NODO-AI ASSISTANT and my work is to help you
+ 
 Rules:
 - Answer ONLY using the provided document context
 - Do NOT output JSON
@@ -48,9 +50,22 @@ def load_recent_chat_history(
 
     messages.reverse()
 
-    return "\n".join(
-        f"{m.role.upper()}: {m.content}"
-        for m in messages
+    return "\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
+
+
+def semantic_search_chunks(
+    db: Session,
+    *,
+    ai_document_id: int,
+    query_embedding: List[float],
+    top_k: int = TOP_K,
+) -> List[DocumentChunk]:
+    return (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.ai_document_id == ai_document_id)
+        .order_by(DocumentChunk.embedding.cosine_distance(query_embedding))
+        .limit(top_k)
+        .all()
     )
 
 
@@ -81,9 +96,7 @@ def chatWithDocument(
     with SessionLocal() as db:
 
         ai_doc = (
-            db.query(AIDocument)
-            .filter(AIDocument.document_id == document_id)
-            .first()
+            db.query(AIDocument).filter(AIDocument.document_id == document_id).first()
         )
 
         if not ai_doc:
@@ -104,15 +117,11 @@ def chatWithDocument(
 
         chat_history = load_recent_chat_history(db, session_id)
 
-        # memory = (
-        #     db.query(SessionMemorySummary)
-        #     .filter_by(session_id=session_id)
-        #     .first()
-        # )
+        memory = db.query(SessionMemorySummary).filter_by(session_id=session_id).first()
 
         query_embedding = createEmbedding(query.strip().lower())
 
-        #Sementic search accross the chunks
+        # Sementic search accross the chunks
         top_chunks = semantic_search_chunks(
             db,
             ai_document_id=ai_doc.id,
@@ -147,30 +156,19 @@ def chatWithDocument(
 
         final_context_parts = []
 
-        # if memory and memory.summary:
-        #     final_context_parts.append(
-        #         f"MEMORY SUMMARY (previous conversation):\n{memory.summary}"
-        #     )
-
-        if chat_history:
+        if memory and memory.summary:
             final_context_parts.append(
-                f"RECENT CHAT HISTORY:\n{chat_history}"
+                f"MEMORY SUMMARY (previous conversation):\n{memory.summary}"
             )
 
-        final_context_parts.append(
-            "DOCUMENT CONTEXT:\n" + "\n\n".join(context_parts)
-        )
+        if chat_history:
+            final_context_parts.append(f"RECENT CHAT HISTORY:\n{chat_history}")
+
+        final_context_parts.append("DOCUMENT CONTEXT:\n" + "\n\n".join(context_parts))
 
         final_context = "\n\n".join(final_context_parts)
 
-        # llm_result = askLlm(
-        #     context=final_context,
-        #     question=query,
-        #     system_prompt=CHAT_SYSTEM_PROMPT,
-        # )
-        llm_result = askLlmWithMemory(
-            db=db,
-            session_id=session_id,
+        llm_result = askLlm(
             context=final_context,
             question=query,
             system_prompt=CHAT_SYSTEM_PROMPT,
@@ -178,7 +176,9 @@ def chatWithDocument(
 
         if llm_result.get("status") != "success":
             logger.error("LLM failed: %s", llm_result)
-            answer = "I’m unable to answer that question based on the document right now."
+            answer = (
+                "I’m unable to answer that question based on the document right now."
+            )
         else:
             answer = llm_result["data"]["answer"]
 
@@ -192,50 +192,47 @@ def chatWithDocument(
         )
         db.commit()
 
-        # submitMemoryUpdate(session_id)
+        submitMemoryUpdate(session_id)
 
         return {
             "status": "success",
             "answer": answer,
             "citations": citations,
         }
-    
 
+ 
 def fetchChatHistory(
     *,
     documentId: int,
-    version: int,
 ) -> dict:
-
+ 
     response = {
         "status": "empty",
         "documentId": documentId,
-        "version": version,
         "sessionId": None,
         "messages": [],
         "error": None,
     }
-
+ 
     db: Session = SessionLocal()
-
+ 
     try:
         ai_doc = (
             db.query(AIDocument)
             .filter(
                 AIDocument.document_id == documentId,
-                DocumentVersion.version_number == version,
             )
             .first()
         )
-
+ 
         if not ai_doc:
             response["status"] = "error"
             response["error"] = "AI document not found for this version"
             return response
-
+ 
         session_id = ai_doc.session_id
         response["sessionId"] = str(session_id)
-
+ 
         # 2️⃣ Fetch full chat history (ALL TIME)
         messages = (
             db.query(SessionMessage)
@@ -243,7 +240,7 @@ def fetchChatHistory(
             .order_by(SessionMessage.created_at.asc())
             .all()
         )
-
+ 
         response["messages"] = [
             {
                 "role": m.role,
@@ -252,15 +249,15 @@ def fetchChatHistory(
             }
             for m in messages
         ]
-
+ 
         response["status"] = "success" if messages else "empty"
         return response
-
+ 
     except SQLAlchemyError:
         logger.exception("Chat history fetch failed")
         response["status"] = "error"
         response["error"] = "Database error"
         return response
-
+ 
     finally:
         db.close()

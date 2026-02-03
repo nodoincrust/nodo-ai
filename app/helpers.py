@@ -7,13 +7,23 @@ import uuid
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import HTTPException, Depends
 from jose import jwt, JWTError
-from app.enum import UserRole, ROLE_LEVEL
-from app.models import Department, User
+from app.enum import UserRole
+from app.models import (
+    Department,
+    User,
+    Document,
+    DocumentSummary,
+    DocumentVersion,
+    AIDocument,
+    ShareDocument,
+)
 from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.services.summary_service import summarizeDocument
 from jobs_store import jobs
 from urllib.parse import quote
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -21,20 +31,24 @@ def get_db():
     finally:
         db.close()
 
+
 SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret-key")
-BACKEND_BASE_URL = "http://192.168.0.183:8000"
+BACKEND_BASE_URL = "http://192.168.0.119:8000"
 ONLYOFFICE_JWT_SECRET = os.getenv("ONLYOFFICE_JWT_SECRET", "onlyoffice-secret-key")
-ONLYOFFICE_SECRET = os.getenv("ONLYOFFICE_SECRET","asdf1234!@yash-dev")
+ONLYOFFICE_SECRET = os.getenv("ONLYOFFICE_SECRET", "asdf1234!@yash-dev")
 ALGORITHM = "HS256"
 security = HTTPBearer()
 GB = 1024**3
 MB = 1024**2
 
+
 def otp_generate():
     return str(random.randint(1000, 9999))
 
+
 def otp_expiry(minutes=5):
     return datetime.utcnow() + timedelta(minutes=minutes)
+
 
 def send_otp_email(to_email: str, otp: str):
     msg = EmailMessage()
@@ -47,6 +61,7 @@ def send_otp_email(to_email: str, otp: str):
         # server.login("avinash@incrustsoftware.com","Incrust@123")
         # server.send_message(msg)
 
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
@@ -58,7 +73,7 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     user_id = payload.get("user_id")
     company_id = payload.get("company_id")
-    name=payload.get("name")
+    name = payload.get("name")
     role = payload.get("role")
     department_id = payload.get("department_id")
     if not user_id or not role:
@@ -80,17 +95,19 @@ def get_current_user(
         "user_id": user_id,
         "company_id": company_id,
         "role": role,
-        "name":name,
+        "name": name,
         "department_id": department.id if department else None,
         "is_department_head": is_department_head,
     }
     return current_user
+
 
 def employee_manage_guard(current_user: dict):
     if current_user["role"] != UserRole.COMPANY_ADMIN.value and not current_user.get(
         "is_department_head"
     ):
         raise HTTPException(403, "Unauthorized access")
+
 
 def get_employee_scoped(db: Session, emp_id: int, current_user: dict):
     query = db.query(User).filter(
@@ -107,6 +124,7 @@ def get_employee_scoped(db: Session, emp_id: int, current_user: dict):
         raise HTTPException(404, "Employee not found or unauthorized")
     return employee
 
+
 def resolve_ui_role(current_user: dict):
     if current_user["role"] == UserRole.SYSTEM_ADMIN:
         return UserRole.SYSTEM_ADMIN
@@ -116,14 +134,18 @@ def resolve_ui_role(current_user: dict):
         return UserRole.DEPARTMENT_HEAD
     return UserRole.EMPLOYEE
 
+
 def gb_to_bytes(gb: int | float) -> int:
     return int(gb * GB)
+
 
 def bytes_to_gb(byte_size: int) -> float:
     return round(byte_size / GB, 2)
 
+
 def bytes_to_mb(byte_size: int) -> float:
     return round(byte_size / MB, 2)
+
 
 def resolve_hierarchy(db: Session, current_user: dict):
     company_id = current_user["company_id"]
@@ -162,9 +184,11 @@ def resolve_hierarchy(db: Session, current_user: dict):
     )
     return dept_head, company_head
 
+
 def company_admin_guard(user: dict):
     if user["role"] != UserRole.COMPANY_ADMIN.value:
         raise HTTPException(status_code=403, detail="Unauthorized access")
+
 
 def get_hierarchy_order(user: User, is_department_head: bool) -> int:
     if user.role == UserRole.COMPANY_ADMIN:
@@ -173,12 +197,14 @@ def get_hierarchy_order(user: User, is_department_head: bool) -> int:
         return 2
     return 1
 
+
 def run_summary_job(job_id: str, documentId: int, version: int):
     try:
-        result = summarizeDocument(documentId, version=version)
+        result = summarizeDocument(documentId, version)
         jobs[job_id] = {"status": "done", "result": result}
     except Exception as e:
         jobs[job_id] = {"status": "error", "error": str(e)}
+
 
 def normalize_role(step):
     role = step.approver_type
@@ -193,6 +219,129 @@ def normalize_role(step):
 
     # uploader
     return "Uploader"
+
+
+def build_tracking_timeline(steps, document_status):
+    timeline = []
+
+    # === CASE: NO STEPS ===
+    if not steps:
+        if document_status == "DRAFT":
+            timeline.append(
+                {
+                    "role": "UPLOADER",
+                    "status": "DRAFT",
+                    "display": "In Draft Mode",
+                    "timestamp": None,
+                }
+            )
+            return timeline, "DRAFT"
+
+        if document_status == "APPROVED":
+            timeline.append(
+                {
+                    "role": "EMPLOYEE",
+                    "status": "APPROVED",
+                    "display": "Self Approved",
+                    "timestamp": None,
+                }
+            )
+            return timeline, "APPROVED"
+
+        # fallback
+        timeline.append(
+            {
+                "role": "UNKNOWN",
+                "status": document_status,
+                "display": document_status.title(),
+                "timestamp": None,
+            }
+        )
+        return timeline, document_status
+
+    rejected = False
+    pending_found = False
+
+    for s in steps:
+
+        # use full step for normalize_role
+        role = normalize_role(s)
+
+        if s.status == "APPROVED":
+            timeline.append(
+                {
+                    "role": role,
+                    "status": "APPROVED",
+                    "display": f"Approved by {role}",
+                    "timestamp": s.action_at,
+                }
+            )
+
+        elif s.status == "PENDING":
+            pending_found = True
+            timeline.append(
+                {
+                    "role": role,
+                    "status": "PENDING",
+                    "display": f"Pending on {role}",
+                    "timestamp": None,
+                }
+            )
+            break
+
+        elif s.status == "REJECTED":
+            rejected = True
+            timeline.append(
+                {
+                    "role": role,
+                    "status": "REJECTED",
+                    "display": f"Rejected by {role}",
+                    "timestamp": s.action_at,
+                }
+            )
+            break
+
+    if rejected:
+        return timeline, "REJECTED"
+
+    if all(s.status == "APPROVED" for s in steps):
+        return timeline, "APPROVED"
+
+    if pending_found:
+        return timeline, "PENDING"
+
+    return timeline, "IN_PROGRESS"
+
+
+def base_shared_query(db):
+    return (
+        db.query(
+            Document.id.label("id"),
+            Document.current_version.label("version"),
+            DocumentVersion.file_name.label("file_name"),
+            DocumentSummary.tags.label("tags"),
+            User.name.label("name"),
+            ShareDocument.created_at.label("shared_at"),
+        )
+        .join(
+            DocumentVersion,
+            (DocumentVersion.document_id == Document.id)
+            & (DocumentVersion.version_number == Document.current_version),
+        )
+        .join(ShareDocument, ShareDocument.document_id == Document.id)
+        .join(User, User.id == ShareDocument.shared_by)  # ⭐ new join here
+        .outerjoin(
+            AIDocument,
+            (AIDocument.document_id == Document.id)
+            & (AIDocument.version_id == DocumentVersion.id),
+        )
+        .outerjoin(
+            DocumentSummary,
+            (DocumentSummary.ai_document_id == AIDocument.id)
+            & (DocumentSummary.version_id == DocumentVersion.id),
+        )
+    )
+
 
 def build_onlyoffice_editor(details, current_user):
     file_info = details["file"]
@@ -211,18 +360,17 @@ def build_onlyoffice_editor(details, current_user):
         "pdf": "pdf",
     }.get(ext, "word")
 
-    editable = (
-        doc_info["uploaded_by"] == current_user["user_id"]
-        and doc_info["status"] in ["DRAFT", "REJECTED","REUPLOADED"]
-    )
+    editable = doc_info["uploaded_by"] == current_user["user_id"] and doc_info[
+        "status"
+    ] in ["DRAFT", "REJECTED", "REUPLOADED"]
 
     file_token = generate_file_token(
         document_id=doc_info["id"],
         version=file_info["version_number"],
         user_id=current_user["user_id"],
         file_path=file_info["file_path"],
-    )           # /storage/companies/...
-    encoded_path = quote(file_info["file_path"])                # encode spaces
+    )  # /storage/companies/...
+    encoded_path = quote(file_info["file_path"])  # encode spaces
 
     # file_url = f"{BACKEND_BASE_URL}{encoded_path}",
     print("Uploaded by:", doc_info["uploaded_by"])
@@ -235,13 +383,11 @@ def build_onlyoffice_editor(details, current_user):
             "fileType": ext,
             "title": file_info["file_name"],
             "key": f"{doc_info['id']}-{file_info['version_number']}",
-
             "url": f"{BACKEND_BASE_URL}{encoded_path}",
-
             "permissions": {
                 "edit": editable,
-                "download": False,   # disable download permanently
-                "print": False,      # disable print permanently
+                "download": False,  # disable download permanently
+                "print": False,  # disable print permanently
                 "comment": False,
                 "review": False,
                 "copy": True,
@@ -268,14 +414,18 @@ def build_onlyoffice_editor(details, current_user):
                 "about": False,
                 "collaboration": False,
                 "protection": False,
-                #Disable unwanted features
+                # Disable unwanted features
                 "showReviewChanges": False,
                 "comments": False,
                 "spellcheck": True,
                 "compactHeader": False,
-
                 "autosave": True,
                 "forcesave": True,
+                # "features": {"featuresTips": False},
+                "logo": {
+                    "visible": False,
+                },
+                "suggestFeature": False,
             },
             "callbackUrl": (
                 f"{BACKEND_BASE_URL}/nodo/newdocuments/onlyoffice/callback/"
@@ -288,7 +438,9 @@ def build_onlyoffice_editor(details, current_user):
 
     return config
 
+
 FILE_TOKEN_STORE = {}
+
 
 def generate_file_token(*, document_id, version, user_id, file_path):
     token = str(uuid.uuid4())
@@ -299,4 +451,6 @@ def generate_file_token(*, document_id, version, user_id, file_path):
         "file_path": file_path,  # ✅ REQUIRED
         "expires_at": datetime.utcnow() + timedelta(minutes=10),
     }
+    print(file_path)
+    print("Generated file token:", token)
     return token

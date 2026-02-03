@@ -5,7 +5,7 @@ import time
 import logging
 from sqlalchemy.orm import Session
 from app.models import DocumentChunk, DocumentSummary
-from .embedding_helper import createEmbeddings 
+from .embedding_helper import createEmbeddings
 
 logger = logging.getLogger("ai.llm_helper")
 
@@ -13,7 +13,7 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen2.5:3b-instruct-q4_0"
 
 # SYSTEM_PROMPT = """
-# You are a document-grounded AI assistant.
+# You are a document-grounded AI Nodo-ai .
 
 # Rules:
 # - Answer ONLY using the provided document context
@@ -40,24 +40,40 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[\.\?\!])\s+")
 _TOKEN_RE = re.compile(r"[A-Za-z]{2,}")
 
 _STOPWORDS = {
-    "the", "and", "is", "in", "to", "of", "a", "for", "on", "with", "as", "by",
-    "that", "this", "are", "was", "it", "be", "or", "from", "at", "an", "which",
+    "the",
+    "and",
+    "is",
+    "in",
+    "to",
+    "of",
+    "a",
+    "for",
+    "on",
+    "with",
+    "as",
+    "by",
+    "that",
+    "this",
+    "are",
+    "was",
+    "it",
+    "be",
+    "or",
+    "from",
+    "at",
+    "an",
+    "which",
 }
 
 
 def cleanInputText(text: str) -> str:
     """Removes non-printable chars"""
-    if not text:
-        return ""
-    return _NON_PRINTABLE_RE.sub(" ", text)  
+    return _NON_PRINTABLE_RE.sub(" ", text)
 
 
 def tokenizeText(text: str) -> List[str]:
     """Extracts meaningful tokens only"""
-    return [
-        t for t in _TOKEN_RE.findall(text.lower())
-        if t not in _STOPWORDS
-    ]  
+    return [t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS]
 
 
 def splitIntoSentences(text: str) -> List[str]:
@@ -66,7 +82,7 @@ def splitIntoSentences(text: str) -> List[str]:
         s.replace("\n", " ").strip()
         for s in _SENTENCE_SPLIT_RE.split(text.strip())
         if s.strip()
-    ] 
+    ]
 
 
 def compressSentence(sentence: str, maxChars: int = 200) -> str:
@@ -77,7 +93,8 @@ def compressSentence(sentence: str, maxChars: int = 200) -> str:
             break
     sentence = " ".join(sentence.split())
     return (
-        sentence if len(sentence) <= maxChars
+        sentence
+        if len(sentence) <= maxChars
         else sentence[: maxChars - 1].rstrip() + "…"
     )
 
@@ -105,6 +122,10 @@ def askLlm(
     system_prompt: str,
     retries: int = 3,
 ) -> Dict[str, Dict[str, str]]:
+    """
+    Generic LLM caller.
+    Caller MUST explicitly pass system_prompt.
+    """
     logger.info(
         f"askLlm called - context length: {len(context)}, question: {question[:100]}..."
     )
@@ -115,14 +136,15 @@ def askLlm(
     payload = {
         "model": MODEL,
         "messages": [
-            {"role": "system", "content": f"{system_prompt}\n\nContext:\n{optimizedContext}"},
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"Context:\n{optimizedContext}"},
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.5,
-            "num_predict": 450,
+            "temperature": 0.6,
+            "num_predict": 700,
             "num_ctx": 16384,
-            "top_k": 20,
+            "top_k": 40,
             "top_p": 0.9,
         },
         "stream": False,
@@ -152,7 +174,7 @@ def askLlm(
                     "status": "error",
                     "data": {"answer": str(exc)},
                 }
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
 
 
 class RAGHelper:
@@ -206,17 +228,21 @@ class RAGHelper:
         try:
             logger.info(f"Updating embedding for ai_document_id={ai_document_id}")
             embedding = createEmbeddings([summary])[0]
-            
-            summary_record = self.db.query(DocumentChunk).filter_by(
-                ai_document_id=ai_document_id
-            ).first()
-            
+
+            summary_record = (
+                self.db.query(DocumentChunk)
+                .filter_by(ai_document_id=ai_document_id)
+                .first()
+            )
+
             if summary_record:
                 summary_record.embedding = embedding
                 self.db.commit()
                 logger.info(f"Updated embedding for summary {ai_document_id}")
             else:
-                logger.warning(f"No summary record to update embedding for {ai_document_id}")
+                logger.warning(
+                    f"No summary record to update embedding for {ai_document_id}"
+                )
         except Exception as e:
             logger.error(f"Failed to update summary embedding: {e}")
             self.db.rollback()

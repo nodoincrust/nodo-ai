@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List, Literal
+from typing import Optional, List, Any
 from datetime import datetime
 from uuid import UUID
 
@@ -140,7 +140,7 @@ class CreateDepartmentSchema(BaseModel):
 class UpdateDeptSchema(BaseModel):
     name: str | None = None
     description: str | None = None
-    head_user_id: int | None = None
+    head_user_id: Optional[int] = None
     is_active: bool
 
 
@@ -200,6 +200,7 @@ class SummaryResponse(BaseModel):
 class DocumentSaveSchema(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = None
+    is_self_generated: Optional[bool] = None
 
 
 class AskRequest(BaseModel):
@@ -225,6 +226,7 @@ class getDepartments(BaseModel):
     pagelimit: int = 10
     search: Optional[str] = None
     status: Optional[str] = None
+    showRecord: Optional[bool] = True
 
 
 class getDepartmentList(BaseModel):
@@ -244,9 +246,115 @@ class GetEmployee(BaseModel):
 
 class GetEmployeeList(BaseModel):
     search: Optional[str] = None
-    
+
+
+class getdeptEmployee(BaseModel):
+    search: Optional[str] = None
+    department_id: int | None = None
+
+
 class GetApprovalDocumentList(BaseModel):
     page: int = 1
     pagelimit: int = 10
-    search:Optional[str]=None
+    search: Optional[str] = None
     status: Optional[str] = None
+
+
+class createBouquetSchema(BaseModel):
+    name: str
+    description: str
+
+
+class BoqFilter(BaseModel):
+    search: Optional[str] = None
+    page: int = 1
+    pagelimit: int = 10
+
+
+class DocFilter(BaseModel):
+    search: Optional[str] = None
+    page: int = 1
+    pagelimit: int = 10
+    bouquetId: Optional[int] = None
+
+
+class updateBouquet(BaseModel):
+    name: str
+    description: str
+
+
+class AppendDocumentsSchema(BaseModel):
+    documentIds: List[int]
+
+
+class BoqDocsFilter(BaseModel):
+    search: Optional[str] = None
+    page: int = 1
+    pagelimit: int = 10
+
+
+class RemoveDocumentsSchema(BaseModel):
+    documentId: int
+
+
+class ShareRequest(BaseModel):
+    document_id: Optional[int] = None
+    bouquet_id: Optional[int] = None
+    template_id: Optional[int] = None 
+    users: List[int] = []
+    departments: List[int] = []
+    company: bool = False
+
+
+class SharedDocViewRequest(BaseModel):
+    key: str
+    page: int = 1
+    pagelimit: int = 10
+    query: str | None = None
+    sort: str | None = None
+    order: str = "asc"
+
+
+class FormFieldCreate(BaseModel):
+        id: Optional[int] = None  
+
+        type: str
+        label: str
+        placeholder: Optional[str] = None
+
+        required: Optional[bool] = False
+        requiredErrorMessage: Optional[str] = None
+
+        fieldOrder: int
+
+        options: Optional[List[Any]] = None
+        classname: Optional[str] = None
+        allowedfiletypes: Optional[Any] = None  # string | array | undefined
+
+class FormRowCreate(BaseModel):
+        rowOrder: int
+        fields: List[FormFieldCreate]
+
+class FormTemplateCreate(BaseModel):
+        templateId: Optional[int] = None
+        templateName: str
+        rows: List[FormRowCreate]
+
+class getTemplate(BaseModel):
+        search: Optional[str] = None
+        page: int = 1
+        pagelimit: int = 10
+        
+class FieldValue(BaseModel):
+    fieldId: int
+    value: Any
+
+
+class TemplateSubmissionCreate(BaseModel):
+    templateId: int
+    values: List[FieldValue]
+
+
+class templateResponse(BaseModel):
+    template_id:int
+    submitted_by:int

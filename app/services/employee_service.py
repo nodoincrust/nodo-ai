@@ -9,9 +9,20 @@ from app.models import (
     Document,
     User,
     Department,
+    DocumentSummary,
     DocumentApprovalStep,
     DocumentWorkflowRun,
 )
+
+
+def normalize_role_name(r: str):
+    if r == "EMPLOYEE":
+        return "Uploader"
+    if r == "DEPARTMENT_HEAD":
+        return "Department Head"
+    if r == "COMPANY_ADMIN":
+        return "Company Admin"
+    return r.title()
 
 
 def get_documents_service(
@@ -24,7 +35,7 @@ def get_documents_service(
 ):
     offset = (page - 1) * size
 
-    # base: user's docs
+    # Base docs uploaded by user
     query = db.query(Document).filter(
         Document.is_delete.is_(False),
         Document.uploaded_by == current_user["user_id"],
@@ -42,6 +53,8 @@ def get_documents_service(
     data = []
 
     for doc in documents:
+
+        # === FIRST VERSION (identity filename) ===
         first_version = (
             db.query(DocumentVersion)
             .filter(DocumentVersion.document_id == doc.id)
@@ -49,6 +62,7 @@ def get_documents_service(
             .first()
         )
 
+        # === LATEST VERSION (current state) ===
         latest_version = (
             db.query(DocumentVersion)
             .filter(DocumentVersion.document_id == doc.id)
@@ -59,10 +73,34 @@ def get_documents_service(
         if not latest_version:
             continue
 
+        # === FETCH SUMMARY & TAGS FOR LATEST VERSION ===
+        summary_obj = (
+            db.query(DocumentSummary)
+            .filter(DocumentSummary.version_id == latest_version.id)
+            .first()
+        )
+
+        summary_text = summary_obj.summary_text if summary_obj else None
+        summary_tags = summary_obj.tags if summary_obj else []
+
+        # === SEARCH (only filename + tags) ===
         if search:
             s = search.lower()
-            if first_version and s not in first_version.file_name.lower():
+            matched = False
+
+            # filename search (v1 identity)
+            if first_version and s in first_version.file_name.lower():
+                matched = True
+
+            # tag search
+            if not matched and summary_tags:
+                if any(isinstance(t, str) and s in t.lower() for t in summary_tags):
+                    matched = True
+
+            if not matched:
                 continue
+
+        # === Compute Pending On Logic ===
         steps = (
             db.query(DocumentApprovalStep)
             .filter(
@@ -77,7 +115,7 @@ def get_documents_service(
         pending_step = next((s for s in steps if s.status == "PENDING"), None)
 
         if pending_step:
-            pending_on = pending_step.approver_type
+            pending_on = f"Pending on {pending_step.approver_type}"
         else:
             rejected = next((s for s in steps if s.status == "REJECTED"), None)
             if rejected:
@@ -88,7 +126,9 @@ def get_documents_service(
                 elif doc.status == "REUPLOADED":
                     pending_on = "Reuploaded"
                 else:
-                    pending_on = doc.status
+                    pending_on = "Draft"
+
+        # === Build Response ===
         data.append(
             {
                 "document_id": doc.id,
@@ -103,53 +143,11 @@ def get_documents_service(
                         else latest_version.file_name
                     ),
                     "file_size_bytes": latest_version.file_size_bytes,
-                    "tags": latest_version.tags,
-                    "summary": latest_version.summary,
+                    "tags": summary_tags,
+                    "summary": summary_text,
                 },
             }
         )
-    # for doc in documents:
-
-    #     # ---------- FIRST VERSION (identity filename) ----------
-    #     first_version = (
-    #         db.query(DocumentVersion)
-    #         .filter(DocumentVersion.document_id == doc.id)
-    #         .order_by(DocumentVersion.version_number.asc())
-    #         .first()
-    #     )
-
-    #     # ---------- LATEST VERSION (current metadata) ----------
-    #     latest_version = (
-    #         db.query(DocumentVersion)
-    #         .filter(DocumentVersion.document_id == doc.id)
-    #         .order_by(DocumentVersion.version_number.desc())
-    #         .first()
-    #     )
-
-    #     if not latest_version:
-    #         continue
-
-    #     # ---------- SEARCH FILTER ----------
-    #     if search:
-    #         s = search.lower()
-    #         # check on first name (identity)
-    #         if first_version and s not in first_version.file_name.lower():
-    #             continue
-
-    #     data.append(
-    #         {
-    #             "document_id": doc.id,
-    #             "status": doc.status,
-    #             "current_version": doc.current_version,
-    #             "version": {
-    #                 "version_number": latest_version.version_number,
-    #                 "file_name": first_version.file_name if first_version else latest_version.file_name,
-    #                 "file_size_bytes": latest_version.file_size_bytes,
-    #                 "tags": latest_version.tags,
-    #                 "summary": latest_version.summary,
-    #             },
-    #         }
-    #     )
 
     return {
         "statusCode": 200,
@@ -175,7 +173,7 @@ def get_assignable_users(db: Session, current_user: dict):
         User.id != user_id,
     )
 
-    dept = None
+    # Case 1: Company Admin can only assign themselves
     if role == UserRole.COMPANY_ADMIN:
         return {
             "statusCode": 200,
@@ -191,6 +189,7 @@ def get_assignable_users(db: Session, current_user: dict):
             ],
         }
 
+    # Case 2: Department Head
     elif role == UserRole.DEPARTMENT_HEAD:
         users = base_users.filter(
             or_(
@@ -199,6 +198,7 @@ def get_assignable_users(db: Session, current_user: dict):
             )
         ).all()
 
+    # Case 3: Employee (fallback logic added here)
     else:
         dept = (
             db.query(Department)
@@ -209,15 +209,20 @@ def get_assignable_users(db: Session, current_user: dict):
             .first()
         )
 
+        # Fallback when no department head assigned
         if not dept or not dept.head_user_id:
-            raise HTTPException(status_code=400, detail="Department head not assigned")
+            # fallback to company admins only (highest hierarchy)
+            users = base_users.filter(User.role == UserRole.COMPANY_ADMIN).all()
+        else:
+            # normal: fallback head + company admin
+            users = base_users.filter(
+                or_(
+                    User.id == dept.head_user_id,
+                    User.role == UserRole.COMPANY_ADMIN,
+                )
+            ).all()
 
-        users = base_users.filter(
-            or_(
-                User.id == dept.head_user_id,
-                User.role == UserRole.COMPANY_ADMIN,
-            )
-        ).all()
+    # build self entry
     self_entry = {
         "user_id": current_user["user_id"],
         "name": current_user["name"],
@@ -230,7 +235,8 @@ def get_assignable_users(db: Session, current_user: dict):
     data = [self_entry]
 
     for u in users:
-        is_dept_head = dept is not None and u.id == dept.head_user_id
+        # determine effective role
+        is_dept_head = dept is not None and u.id == getattr(dept, "head_user_id", None)
 
         if u.role == UserRole.COMPANY_ADMIN:
             effective_role = UserRole.COMPANY_ADMIN

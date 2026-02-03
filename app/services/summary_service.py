@@ -1,3 +1,4 @@
+# SUMMERY SERVICE
 import logging
 import json
 import re
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 from app.db import SessionLocal
 from app.models import DocumentChunk, DocumentSummary, AIDocument, DocumentVersion
 from app.AIhelpers.llm_helper import askLlm, RAGHelper
-from app.services.ai_DBservice import getOrCreateSessionForDocument, createChunksForExistingAIDocument
+from app.services.ai_db_service import getOrCreateSessionForDocument, createChunksForExistingAIDocument
 from app.AIhelpers.chunk_helper import select_top_chunks
 
 logger = logging.getLogger("ai.summaryService")
@@ -26,7 +27,6 @@ STRICT RULES:
  The summary MUST be written in FULL 2 PARAGRAPHS.
  Bullet points, hyphens, or numbered lists are STRICTLY FORBIDDEN.
  Each line MUST be a complete explanatory sentence.
-
 OUTPUT FORMAT (MANDATORY):
 {
   "summary": "string",
@@ -295,6 +295,8 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
             f"DOCUMENT EXCERPTS:\n{document_context}"
         )
 
+        logger.info(f"Calling LLM with context length: {len(llm_context)}")
+
         llm_result = askLlm(
             context=llm_context,
             question="Generate or refine the document summary with tags and citations.",
@@ -368,7 +370,7 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
         except Exception as emb_exc:
             logger.warning(f"Embedding update failed: {emb_exc}")
 
-        return {
+        result = {
             "status": "success",
             "refined": bool(is_refinement),
             "summary": parsed["summary"],

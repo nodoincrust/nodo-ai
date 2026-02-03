@@ -654,6 +654,7 @@ def createTemplate(db: Session, payload, current_user: dict):
 
             for row in payload.rows:
                 for field in row.fields:
+                    print(field.allowedfiletypes)
                     # 🔑 composite order preserves rows
                     composite_order = (row.rowOrder * 100) + field.fieldOrder
 
@@ -727,9 +728,10 @@ def createTemplate(db: Session, payload, current_user: dict):
             db.flush()
 
             new_fields = []
-
+           
             for row in payload.rows:
                 for field in row.fields:
+                    print(field.allowedfiletypes)
                     composite_order = (row.rowOrder * 100) + field.fieldOrder
 
                     new_fields.append(

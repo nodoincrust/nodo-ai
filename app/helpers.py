@@ -340,6 +340,7 @@ def base_shared_query(db):
             (DocumentSummary.ai_document_id == AIDocument.id)
             & (DocumentSummary.version_id == DocumentVersion.id),
         )
+        .order_by(ShareDocument.created_at.desc())
     )
 
 

@@ -122,6 +122,8 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
             }
 
         logger.info(f"Found AIDocument: id={ai_doc.id}, session_id={ai_doc.session_id}")
+        document_name = ai_doc.filename 
+
 
         # 2. Load chunks
         chunks = (
@@ -224,7 +226,7 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
             logger.error("Chunks exist but contain no meaningful semantic content")
             return {
                 "status": "error",
-                "refined": False,
+                "doument_name":document_name,
                 "summary": (
                     "The document does not contain sufficient readable or meaningful text "
                     "to generate a reliable summary. It may consist mainly of images, "
@@ -270,7 +272,7 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
         if len(document_context) < min_len:
             return {
                 "status": "error",
-                "refined": False,
+                "document_name":document_name,
                 "summary": (
                     "Extracted text is too limited to produce a reliable summary."
                 ),
@@ -328,55 +330,58 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
 
         citations = parsed.get("citations") or default_citations
 
-        # 8. Save summary
-        try:
-            if existing:
-                existing.summary_text = parsed["summary"]
-                existing.tags = tags
-                existing.citations = citations
-                existing.updated_at = datetime.now(timezone.utc)
-            else:
-                db.add(
-                    DocumentSummary(
-                        ai_document_id=ai_doc.id,
-                        version_id=version_id,
-                        summary_text=parsed["summary"],
-                        tags=tags,
-                        citations=citations,
-                    )
-                )
-            db.commit()
+        # # 8. Save summary
+        # try:
+        #     if existing:
+        #         existing.summary_text = parsed["summary"]
+        #         existing.tags = tags
+        #         existing.citations = citations
+        #         existing.updated_at = datetime.now(timezone.utc)
+        #     else:
+        #         db.add(
+        #             DocumentSummary(
+        #                 ai_document_id=ai_doc.id,
+        #                 version_id=version_id,
+        #                 summary_text=parsed["summary"],
+        #                 tags=tags,
+        #                 citations=citations,
+        #             )
+        #         )
+        #     db.commit()
 
-        except IntegrityError:
-            db.rollback()
-            # HARD SAFE UPDATE
-            existing = db.query(DocumentSummary).filter(
-                DocumentSummary.ai_document_id == ai_doc.id,
-                DocumentSummary.version_id == version_id,
-            ).first()
+        # except IntegrityError:
+        #     db.rollback()
+        #     # HARD SAFE UPDATE
+        #     existing = db.query(DocumentSummary).filter(
+        #         DocumentSummary.ai_document_id == ai_doc.id,
+        #         DocumentSummary.version_id == version_id,
+        #     ).first()
 
-            if existing:
-                existing.summary_text = parsed["summary"]
-                existing.tags = tags
-                existing.citations = citations
-                existing.updated_at = datetime.now(timezone.utc)
-                db.commit()
+        #     if existing:
+        #         existing.summary_text = parsed["summary"]
+        #         existing.tags = tags
+        #         existing.citations = citations
+        #         existing.updated_at = datetime.now(timezone.utc)
+        #         db.commit()
 
 
-        # 9. Update embedding (non-critical)
-        try:
-            rag = RAGHelper(db)
-            rag.update_summary_embedding(ai_doc.id, parsed["summary"])
-        except Exception as emb_exc:
-            logger.warning(f"Embedding update failed: {emb_exc}")
+        # # 9. Update embedding (non-critical)
+        # try:
+        #     rag = RAGHelper(db)
+        #     rag.update_summary_embedding(ai_doc.id, parsed["summary"])
+        # except Exception as emb_exc:
+        #     logger.warning(f"Embedding update failed: {emb_exc}")
 
         result = {
             "status": "success",
             "refined": bool(is_refinement),
             "summary": parsed["summary"],
+            "document_name":document_name,
             "tags": tags,
             "version_id": version_id
         }
+        
+        return result
 
     except Exception as exc:
         logger.exception(f"Summary generation failed: {exc}")

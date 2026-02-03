@@ -340,4 +340,5 @@ def base_shared_template_query(db):
         .join(ShareDocument, ShareDocument.template_id == FormTemplate.id)
         .join(User, User.id == ShareDocument.shared_by)
         .filter(ShareDocument.template_id.isnot(None))
+        .order_by(ShareDocument.created_at.desc())
     )

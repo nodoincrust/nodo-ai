@@ -516,7 +516,9 @@ def save_template(
     payload:FormTemplateCreate,
     db:Session = Depends(get_db),
     current_user:dict = Depends(get_current_user)
-):
+    
+):   
+    print(payload)
     return createTemplate(db=db,payload=payload,current_user=current_user)
 
 

@@ -1,3 +1,5 @@
+import json
+from typing import List
 from fastapi import (
     APIRouter,
     UploadFile,
@@ -32,7 +34,8 @@ from app.schemas import (
     ShareRequest,
     SharedDocViewRequest,
     FormTemplateCreate,
-    getTemplate,TemplateSubmissionCreate
+    getTemplate,
+    templateResponse
     
 )
 from app.services.document_service import (
@@ -62,7 +65,9 @@ from app.services.bouquet_service import (
     get_templates_list,
     get_templates_feilds,
     delete_templates_service,
-    submit_template_form
+    submit_template_form,
+    fetch_template_submissions,
+    get_template_response_user
     
 )
 from app.services.document_sharing import  share_docboq_service,list_shared_bouquets,list_shared_documents,list_shared_templates
@@ -535,16 +540,41 @@ def delete_template(templateID:int,db:Session=Depends(get_db),current_user:dict=
 
 @router.post("/submitTemplateForm")
 def submit_template(
-    payload: TemplateSubmissionCreate,
+    payload: str = Form(...),
+    files: List[UploadFile] = File([]),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    payload_dict = json.loads(payload)
+
     return submit_template_form(
         db=db,
-        payload=payload,
+        payload=payload_dict,
+        files=files,
+        current_user=current_user
+    )
+
+@router.get("/submissions/{template_id}")
+def get_template_submission(template_id:int,db:Session=Depends(get_db),current_user:dict=Depends(get_current_user)):
+    return fetch_template_submissions(
+        db=db,
+        template_id=template_id,
         current_user=current_user
     )
     
+@router.post("/templates/submissions/filledvalues")
+def get_template_response(
+    payload: templateResponse,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    return get_template_response_user(
+        db=db,
+        template_id=payload.template_id,
+        submitted_by=payload.submitted_by,
+        current_user=current_user
+    )
+
 @router.post("/onlyoffice/callback/{document_id}")
 async def onlyoffice_callback(document_id: int, request: Request):
     body = await request.json()

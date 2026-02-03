@@ -523,27 +523,24 @@ class FormField(Base):
         "FormTemplate",
         back_populates="fields"
     )
+    
 class TemplateSubmission(Base):
     __tablename__ = "template_submissions"
 
-    id = Column(BigInteger, primary_key=True)
+    id = Column(Integer, primary_key=True, index=True)
+
     template_id = Column(
-        BigInteger,
-        ForeignKey("form_templates.id", ondelete="CASCADE")
+        Integer,
+        ForeignKey("form_templates.id", ondelete="CASCADE"),
+        nullable=False
     )
-    submitted_by = Column(BigInteger, nullable=False)
+
+    submitted_by = Column(Integer, nullable=False)
+
+    response_json = Column(JSONB, nullable=False)
+
     created_at = Column(DateTime, default=datetime.utcnow)
-
-class TemplateSubmissionValue(Base):
-    __tablename__ = "template_submission_values"
-
-    id = Column(BigInteger, primary_key=True)
-    submission_id = Column(
-        BigInteger,
-        ForeignKey("template_submissions.id", ondelete="CASCADE")
-    )
-    field_id = Column(
-        BigInteger,
-        ForeignKey("form_fields.id", ondelete="CASCADE")
-    )
-    value = Column(JSON)  # store any type safely
+    
+    
+    
+   

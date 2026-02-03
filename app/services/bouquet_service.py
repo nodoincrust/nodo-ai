@@ -5,7 +5,14 @@ from sqlalchemy.orm import aliased
 from app.helpers import bytes_to_mb
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.orm import Session
-from app.schemas import BoqFilter, DocFilter, updateBouquet, BoqDocsFilter,TemplateSubmissionCreate
+from app.schemas import (
+    BoqFilter,
+    DocFilter,
+    updateBouquet,
+    BoqDocsFilter,
+    TemplateSubmissionCreate,
+    templateResponse,
+)
 
 from app.models import (
     Bouquet,
@@ -16,9 +23,14 @@ from app.models import (
     DocumentSummary,
     FormTemplate,
     FormField,
-    TemplateSubmissionValue,
-    TemplateSubmission
+    TemplateSubmission,
+    User,
 )
+import os
+from uuid import uuid4
+
+UPLOAD_DIR = "storage/uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 def createBouquet(db: Session, name: str, description: str | None, current_user: dict):
@@ -371,21 +383,20 @@ def get_approved_documents_service(db: Session, current_user: dict, filters: Doc
         .limit(filters.pagelimit)
         .all()
     )
-    selected_ids=set()
+    selected_ids = set()
     if filters.bouquetId:
-        bouquet=(
+        bouquet = (
             db.query(Bouquet)
             .filter(
-                Bouquet.id==filters.bouquetId,
-                Bouquet.createdBy==current_user["user_id"],
-                Bouquet.isDelete.is_(False)
+                Bouquet.id == filters.bouquetId,
+                Bouquet.createdBy == current_user["user_id"],
+                Bouquet.isDelete.is_(False),
             )
             .first()
         )
-        
-        if bouquet and bouquet.documentsInBouquet:
-            selected_ids={d["documentId"] for d in bouquet.documentsInBouquet}
 
+        if bouquet and bouquet.documentsInBouquet:
+            selected_ids = {d["documentId"] for d in bouquet.documentsInBouquet}
 
     data = []
 
@@ -421,10 +432,10 @@ def get_approved_documents_service(db: Session, current_user: dict, filters: Doc
                 "tags": summary_row.tags if summary_row else [],
                 "summary": summary_row.summary_text if summary_row else None,
                 "uploaded_by": doc.uploaded_by,
-                "is_selected_doc":doc.id in selected_ids
+                "is_selected_doc": doc.id in selected_ids,
             }
         )
-    
+
     return {
         "statusCode": 200,
         "message": (
@@ -469,8 +480,8 @@ def update_boq_details(
 
 def get_bouquet_documents_service(
     db: Session, current_user: dict, bouquetId: int, filters: BoqDocsFilter
-):  
-    print("boqid",bouquetId)
+):
+    print("boqid", bouquetId)
     bouquet = (
         db.query(Bouquet)
         .filter(
@@ -574,18 +585,19 @@ def get_bouquet_documents_service(
         "data": data,
     }
 
+
 # def createTemplate(db:Session,payload,current_user:dict):
-    
+
 #     try:
 #         template = FormTemplate(
 #             template_name=payload.templateName,
 #             created_by=current_user["user_id"]
 #         )
-        
+
 #         db.add(template)
 #         db.flush()
-        
-        
+
+
 #         fields_to_create=[
 #             FormField(
 #                 template_id=template.id,
@@ -599,10 +611,11 @@ def get_bouquet_documents_service(
 #             )
 #             for field in payload.fields
 #         ]
-        
+
 #         db.add_all(fields_to_create)
 #         db.commit()
-            
+
+
 #         return {
 #             "statusCode":200,
 #             "message":"Template created successfully"
@@ -615,13 +628,13 @@ def createTemplate(db: Session, payload, current_user: dict):
         # ==========================
         # UPDATE TEMPLATE
         # ==========================
-       
+
         if payload.templateId:
             template = (
                 db.query(FormTemplate)
                 .filter(
                     FormTemplate.id == payload.templateId,
-                    FormTemplate.created_by == current_user["user_id"]
+                    FormTemplate.created_by == current_user["user_id"],
                 )
                 .first()
             )
@@ -632,9 +645,7 @@ def createTemplate(db: Session, payload, current_user: dict):
             template.template_name = payload.templateName
 
             existing_fields = (
-                db.query(FormField)
-                .filter(FormField.template_id == template.id)
-                .all()
+                db.query(FormField).filter(FormField.template_id == template.id).all()
             )
 
             existing_map = {f.id: f for f in existing_fields}
@@ -677,7 +688,7 @@ def createTemplate(db: Session, payload, current_user: dict):
                                 allowedfiletypes=normalize_allowed_file_types(
                                     field.allowedfiletypes
                                 ),
-                                classname=field.classname
+                                classname=field.classname,
                             )
                         )
 
@@ -693,23 +704,23 @@ def createTemplate(db: Session, payload, current_user: dict):
         # CREATE TEMPLATE
         # ==========================
         else:
-            existing_template=(
+            existing_template = (
                 db.query(FormTemplate)
                 .filter(
                     FormTemplate.template_name == payload.templateName,
-                    FormTemplate.created_by == current_user["user_id"]
-                ).first()
+                    FormTemplate.created_by == current_user["user_id"],
+                )
+                .first()
             )
-            
+
             if existing_template:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Template with {payload.templateName} already exist! "
+                    detail=f"Template with {payload.templateName} already exist! ",
                 )
-                
+
             template = FormTemplate(
-                template_name=payload.templateName,
-                created_by=current_user["user_id"]
+                template_name=payload.templateName, created_by=current_user["user_id"]
             )
 
             db.add(template)
@@ -734,7 +745,7 @@ def createTemplate(db: Session, payload, current_user: dict):
                             allowedfiletypes=normalize_allowed_file_types(
                                 field.allowedfiletypes
                             ),
-                            classname=field.classname
+                            classname=field.classname,
                         )
                     )
 
@@ -748,56 +759,53 @@ def createTemplate(db: Session, payload, current_user: dict):
                 "Template updated successfully"
                 if payload.templateId
                 else "Template created successfully"
-            )
+            ),
         }
 
     except Exception:
         db.rollback()
         raise
 
-def get_templates_list(db:Session,current_user:dict,payload):
-    
-    
-    query=(
-        db.query(FormTemplate)
-        .filter(FormTemplate.created_by == current_user["user_id"])
+
+def get_templates_list(db: Session, current_user: dict, payload):
+
+    query = db.query(FormTemplate).filter(
+        FormTemplate.created_by == current_user["user_id"]
     )
-    
+
     if payload.search:
-        query=query.filter(
-            FormTemplate.template_name.ilike(f"%{payload.search}%")
-        )
-    
-    total_count=query.count()
-    
-    offset = (payload.page - 1)* payload.pagelimit
-    
-    templates=(
-        query
-        .order_by(FormTemplate.created_at.desc())
+        query = query.filter(FormTemplate.template_name.ilike(f"%{payload.search}%"))
+
+    total_count = query.count()
+
+    offset = (payload.page - 1) * payload.pagelimit
+
+    templates = (
+        query.order_by(FormTemplate.created_at.desc())
         .offset(offset)
         .limit(payload.pagelimit)
         .all()
     )
-    
-    data=[
+
+    data = [
         {
-        "id":template.id,
-        "templateName":template.template_name,
-        "createdAt":template.created_at
-    }
-    for template in templates
+            "id": template.id,
+            "templateName": template.template_name,
+            "createdAt": template.created_at,
+        }
+        for template in templates
     ]
-    
+
     return {
-        "statusCode":200,
-        "message":"Template fetched successfully",
-        "data":data,
-        "page":payload.page,
-        "pagelimit":payload.pagelimit,
-        "total":total_count
+        "statusCode": 200,
+        "message": "Template fetched successfully",
+        "data": data,
+        "page": payload.page,
+        "pagelimit": payload.pagelimit,
+        "total": total_count,
     }
-    
+
+
 def get_templates_feilds(db: Session, template_id: int, current_user: dict):
 
     template = (
@@ -811,8 +819,30 @@ def get_templates_feilds(db: Session, template_id: int, current_user: dict):
 
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-
-    rows = build_rows_from_fields(template.fields)
+    
+    submission_exists=(
+        db.query(TemplateSubmission)
+        .filter(
+            TemplateSubmission.template_id == template_id,
+            TemplateSubmission.submitted_by == current_user["user_id"]
+        )
+        .first()
+    )
+    has_submitted = submission_exists is not None
+    
+    submitted_values_map = {}
+    
+    if submission_exists:
+        for item in submission_exists.response_json.get("values", []):
+            submitted_values_map[item["fieldId"]] = item["value"]
+            
+    if has_submitted:
+        rows= build_rows_with_values(
+            template.fields,
+            submitted_values_map
+        )
+    else:
+         rows = build_rows_from_fields(template.fields)
 
     return {
         "statusCode": 200,
@@ -820,10 +850,10 @@ def get_templates_feilds(db: Session, template_id: int, current_user: dict):
         "data": {
             "templateId": template.id,
             "templateName": template.template_name,
-            "rows": rows
-        }
+            "isSubmitted":has_submitted,
+            "rows": rows,
+        },
     }
-    
 
 
 def build_rows_from_fields(fields):
@@ -837,29 +867,25 @@ def build_rows_from_fields(fields):
         field_order = field.field_order % 100
 
         if row_order not in rows_map:
-            rows_map[row_order] = {
-                "rowOrder": row_order,
-                "fields": []
-            }
+            rows_map[row_order] = {"rowOrder": row_order, "fields": []}
 
-        rows_map[row_order]["fields"].append({
-            "id": field.id,
-            "type": field.type,
-            "label": field.label,
-            "placeholder": field.placeholder,
-            "required": field.required,
-            "requiredErrorMessage": field.errmsg or "",
-            "options": field.options or [],
-            "allowedfiletypes": field.allowedfiletypes,
-            "classname": field.classname,
-            "fieldOrder": field_order
-        })
+        rows_map[row_order]["fields"].append(
+            {
+                "id": field.id,
+                "type": field.type,
+                "label": field.label,
+                "placeholder": field.placeholder,
+                "required": field.required,
+                "requiredErrorMessage": field.errmsg or "",
+                "options": field.options or [],
+                "allowedfiletypes": field.allowedfiletypes,
+                "classname": field.classname,
+                "fieldOrder": field_order,
+            }
+        )
 
     # return rows sorted by rowOrder
     return [rows_map[k] for k in sorted(rows_map.keys())]
-
-
-
 
 
 def normalize_allowed_file_types(value):
@@ -870,61 +896,228 @@ def normalize_allowed_file_types(value):
     return str(value)
 
 
-def delete_templates_service(db:Session,current_user:dict,templateID):
-    
+def delete_templates_service(db: Session, current_user: dict, templateID):
+
     if not templateID:
-        raise HTTPException(status_code=400,detail="Template id required")
-    
-    template=(db.query(FormTemplate)
-                .filter(FormTemplate.id==templateID,FormTemplate.created_by==current_user["user_id"]) .first()
-            )           
-    
-    
+        raise HTTPException(status_code=400, detail="Template id required")
+
+    template = (
+        db.query(FormTemplate)
+        .filter(
+            FormTemplate.id == templateID,
+            FormTemplate.created_by == current_user["user_id"],
+        )
+        .first()
+    )
+
     if not template:
-        raise HTTPException(status_code=404,detail="Template id not found")
-    
+        raise HTTPException(status_code=404, detail="Template id not found")
+
     db.delete(template)
     db.commit()
-    
-    return{
-        "statusCode":200,
-        "message":"Template deleted successfully"
-    }
-    
-def submit_template_form(
-    db: Session,
-    payload: TemplateSubmissionCreate,
-    current_user: dict
-):
-    template = db.query(FormTemplate).filter(
-        FormTemplate.id == payload.templateId
-    ).first()
+
+    return {"statusCode": 200, "message": "Template deleted successfully"}
+
+
+def submit_template_form(db: Session, payload: dict, files: list, current_user: dict):
+    template = (
+        db.query(FormTemplate).filter(FormTemplate.id == payload["templateId"]).first()
+    )
 
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    
+    existing_submission=(
+        db.query(TemplateSubmission.id)
+        .filter(
+            TemplateSubmission.template_id==payload["templateId"],
+            TemplateSubmission.submitted_by == current_user["user_id"]
+        )
+        .first()
+    )
 
+    if existing_submission:
+       return{
+           "statusCode":403,
+           "message":"You already Submitted this form",
+           "data":{
+               "isSubmitted":True
+           }
+       }
+    # 1️⃣ Save files and map by fieldId
+    file_map = {}
+    file_index = 0
+
+    for item in payload["values"]:
+        if isinstance(item["value"], dict):  # file field
+            uploaded_file = files[file_index]
+
+            filename = f"{uuid4()}_{uploaded_file.filename}"
+            file_path = os.path.join(UPLOAD_DIR, filename)
+
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.file.read())
+
+            file_map[item["fieldId"]] = f"uploads/{filename}"
+            file_index += 1
+
+    # 2️⃣ Replace file objects with stored paths
+    for item in payload["values"]:
+        if item["fieldId"] in file_map:
+            item["value"] = file_map[item["fieldId"]]
+
+    # 3️⃣ Store submission
     submission = TemplateSubmission(
-        template_id=payload.templateId,
-        submitted_by=current_user["user_id"]
+        template_id=payload["templateId"],
+        submitted_by=current_user["user_id"],
+        response_json={"values": payload["values"]},
     )
 
     db.add(submission)
-    db.flush() 
-
-    values_to_insert = [
-        TemplateSubmissionValue(
-            submission_id=submission.id,
-            field_id=item.fieldId,
-            value=item.value
-        )
-        for item in payload.values
-    ]
-
-    db.add_all(values_to_insert)
     db.commit()
+    db.refresh(submission)
 
     return {
         "statusCode": 200,
         "message": "Form submitted successfully",
-        "submissionId": submission.id
+        "submissionId": submission.id,
     }
+
+
+def fetch_template_submissions(db: Session, template_id, current_user: dict):
+
+    template = (
+        db.query(FormTemplate)
+        .filter(
+            FormTemplate.id == template_id,
+            FormTemplate.created_by == current_user["user_id"],
+        )
+        .first()
+    )
+
+    if not template:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not allowed to view submissions for this template",
+        )
+
+    submissions = (
+        db.query(
+            TemplateSubmission.id.label("submission_id"),
+            TemplateSubmission.created_at.label("submitted_at"),
+            User.id.label("submitedUserID"),
+            User.name.label("submitted_by"),
+        )
+        .join(User, User.id == TemplateSubmission.submitted_by)
+        .filter(TemplateSubmission.template_id == template_id)
+        .order_by(TemplateSubmission.created_at.desc())
+        .all()
+    )
+
+    submission_list = [
+        {
+            "submissionId": sub.submission_id,
+            "submittedBy": sub.submitted_by,
+            "submitedUserID": sub.submitedUserID,
+            "submittedAt": sub.submitted_at,
+        }
+        for sub in submissions
+    ]
+
+    return {
+        "statusCode": 200,
+        "templateId": template_id,
+        "totalsubmissions": len(submission_list),
+        "data": submission_list,
+    }
+
+
+def get_template_response_user(
+    db: Session, template_id: int, submitted_by: int, current_user: dict
+):
+
+    template = (
+        db.query(FormTemplate)
+        .filter(
+            FormTemplate.id == template_id,
+            FormTemplate.created_by == current_user["user_id"],
+        )
+        .first()
+    )
+
+    if not template:
+        raise HTTPException(
+            status_code=403, detail="You are not allowed to view this template"
+        )
+
+    submission = (
+        db.query(TemplateSubmission)
+        .filter(
+            TemplateSubmission.template_id == template_id,
+            TemplateSubmission.submitted_by == submitted_by,
+        )
+        .first()
+    )
+
+    if not submission:
+        raise HTTPException(
+            status_code=404, detail="Submission not found for this user"
+        )
+
+    submitted_values_map = {
+        item["fieldId"]: item["value"]
+        for item in submission.response_json.get("values", [])
+    }
+
+    rows = build_rows_with_values(template.fields, submitted_values_map)
+
+    return {
+        "statusCode": 200,
+        "message": "Template submission fetched successfully",
+        "data": {
+            "template_id": template.id,
+            "templateName": template.template_name,
+            "submittedBy": submitted_by,
+            "submittedAt": submission.created_at,
+            "data": rows,
+        },
+    }
+
+
+def build_rows_with_values(fields, submitted_values_map):
+    rows_map = {}
+
+    # sort fields by global order
+    sorted_fields = sorted(fields, key=lambda f: f.field_order)
+
+    for field in sorted_fields:
+        row_order = field.field_order // 100
+        field_order = field.field_order % 100
+
+        if row_order not in rows_map:
+            rows_map[row_order] = {"rowOrder": row_order, "fields": []}
+
+        value = submitted_values_map.get(field.id)
+
+        field_data = {
+            "id": field.id,
+            "type": field.type,
+            "label": field.label,
+            "placeholder": field.placeholder,
+            "required": field.required,
+            "requiredErrorMessage": field.errmsg or "",
+            "options": field.options or [],
+            "allowedfiletypes": field.allowedfiletypes,
+            "classname": field.classname,
+            "fieldOrder": field_order,
+            "value": value,
+        }
+
+        # 🔹 file field handling
+        if field.type == "file" and isinstance(value, str):
+            field_data["fileUrl"] = f"/storage/{value}"
+
+        rows_map[row_order]["fields"].append(field_data)
+
+    # return rows sorted by rowOrder
+    return [rows_map[k] for k in sorted(rows_map.keys())]

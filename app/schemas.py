@@ -344,10 +344,17 @@ class getTemplate(BaseModel):
         search: Optional[str] = None
         page: int = 1
         pagelimit: int = 10
-class TemplateFieldValue(BaseModel):
+        
+class FieldValue(BaseModel):
     fieldId: int
     value: Any
 
+
 class TemplateSubmissionCreate(BaseModel):
     templateId: int
-    values: List[TemplateFieldValue]
+    values: List[FieldValue]
+
+
+class templateResponse(BaseModel):
+    template_id:int
+    submitted_by:int

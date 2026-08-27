@@ -1,10 +1,25 @@
-pip install fastapi uvicorn pandas numpy
-pip install sqlalchemy psycopg2-binary
-python-jose passlib email-validator
-
-pip install fastapi uvicorn sqlalchemy psycopg2-binary pgvector
-pip install pydantic python-multipart requests redis spacy
-pip install  python-docx openpyxl xlrd requests
-
-python -m pip install pymupdf pytesseract pillow pdf2image 
-python -m spacy download en_core_web_sm
+fastapi
+uvicorn
+pandas
+numpy
+sqlalchemy
+psycopg2-binary
+pgvector
+python-jose
+passlib
+email-validator
+pydantic
+python-multipart
+requests
+redis
+spacy
+python-docx
+openpyxl
+xlrd
+pymupdf
+pytesseract
+pillow
+pdf2image
+python-dotenv
+pdf2docx
+python-pptx

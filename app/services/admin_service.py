@@ -173,7 +173,12 @@ def verify_otp_service(email: str, otp: str, db: Session):
         if company and user.role.value in ["COMPANY_ADMIN", "EMPLOYEE"]:
             total_space = company.total_space
             used_space_bytes = (
-                db.query(func.sum(DocumentVersion.file_size_bytes))
+                db.query(
+                    func.coalesce(
+                        func.sum(DocumentVersion.file_size_bytes),
+                          0,
+                    )
+                )
                 .join(Document, Document.id == DocumentVersion.document_id)
                 .filter(
                     Document.company_id == user.company_id,
@@ -212,7 +217,8 @@ def verify_otp_service(email: str, otp: str, db: Session):
                 },
             },
         }
-    except Exception:
+    except Exception as e:
+        print(e)
         db.rollback()
         raise HTTPException(status_code=500, detail="OTP verification failed")
 

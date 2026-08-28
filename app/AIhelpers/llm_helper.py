@@ -142,8 +142,9 @@ def askLlm(
         ],
         "options": {
             "temperature": 0.6,
-            "num_predict": 700,
-            "num_ctx": 16384,
+            "num_predict": 400,
+            "num_ctx": 8192,
+            "num_thread": 4,
             "top_k": 40,
             "top_p": 0.9,
         },

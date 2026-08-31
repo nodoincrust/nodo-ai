@@ -5,6 +5,7 @@ numpy
 sqlalchemy
 psycopg2-binary
 pgvector
+boto3
 python-jose
 passlib
 email-validator

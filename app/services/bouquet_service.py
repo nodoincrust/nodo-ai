@@ -27,10 +27,15 @@ from app.models import (
     User,
 )
 import os
+import shutil
+import tempfile
 from uuid import uuid4
 
-UPLOAD_DIR = "storage/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+from app.AIhelpers.s3_storage import (
+    buildUploadKey,
+    generateSignedUrl,
+    uploadFile,
+)
 
 
 def createBouquet(db: Session, name: str, description: str | None, current_user: dict):
@@ -955,12 +960,19 @@ def submit_template_form(db: Session, payload: dict, files: list, current_user: 
             uploaded_file = files[file_index]
 
             filename = f"{uuid4()}_{uploaded_file.filename}"
-            file_path = os.path.join(UPLOAD_DIR, filename)
+            s3_key = buildUploadKey(filename)
 
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.file.read())
+            suffix = os.path.splitext(uploaded_file.filename)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                shutil.copyfileobj(uploaded_file.file, tmp)
+                temp_path = tmp.name
 
-            file_map[item["fieldId"]] = f"uploads/{filename}"
+            try:
+                uploadFile(localPath=temp_path, key=s3_key)
+            finally:
+                os.remove(temp_path)
+
+            file_map[item["fieldId"]] = s3_key
             file_index += 1
 
     # 2️⃣ Replace file objects with stored paths
@@ -1117,7 +1129,7 @@ def build_rows_with_values(fields, submitted_values_map):
 
         # 🔹 file field handling
         if field.type == "file" and isinstance(value, str):
-            field_data["fileUrl"] = f"/storage/{value}"
+            field_data["fileUrl"] = generateSignedUrl(value)
 
         rows_map[row_order]["fields"].append(field_data)
 

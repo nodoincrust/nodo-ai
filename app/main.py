@@ -3,7 +3,6 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from app.controllers.admin_controller import router as parentRoute
 from app.controllers.company_controller import router as comproute
 from app.controllers.document_controller import router as docroute
@@ -65,12 +64,6 @@ app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 # app.add_exception_handler(404, route_not_found_handler)
 
-
-app.mount(
-    "/storage",
-    StaticFiles(directory="storage"),
-    name="storage",
-)
 
 
 @app.get("/")

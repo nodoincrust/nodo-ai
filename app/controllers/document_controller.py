@@ -48,6 +48,9 @@ from app.services.document_service import (
     reject_document_step,
     reupload_document_version,
     get_approver_inbox,
+    processDocumentAndCleanup,
+    verify_onlyoffice_callback,
+    save_edited_document,
     
     
 )
@@ -112,14 +115,14 @@ async def uploadDocument(
             newVersion = reupload_document_version(
                 db=db,
                 document_id=document.id,
-                file_path=tempPath,
+                temp_path=tempPath,
                 file_name=file.filename,
                 created_by=currentUser["user_id"],
             )
  
-            # AI Processing for v2
+            # AI Processing reads the temp file, then removes it
             background_tasks.add_task(
-                processDocument,
+                processDocumentAndCleanup,
                 filePath=tempPath,
                 documentId=document.id,
                 versionId=newVersion["version_id"],
@@ -146,12 +149,12 @@ async def uploadDocument(
     )
  
     businessDocumentId = result["document_id"]
-    permanentPath = result["file_path"]
+    s3Key = result["file_path"]
     versionId = result["version_id"]
  
     background_tasks.add_task(
-        processDocument,
-        filePath=permanentPath,
+        processDocumentAndCleanup,
+        filePath=tempPath,
         documentId=businessDocumentId,
         versionId=versionId,
         filename=file.filename,
@@ -162,7 +165,7 @@ async def uploadDocument(
     return {
         "status": "success",
         "documentId": businessDocumentId,
-        "filepath": permanentPath,
+        "filepath": s3Key,
         "fileSizeMb": round(fileSizeMb, 2),
     }
  
@@ -289,23 +292,17 @@ async def reupload_document(
         os.remove(temp_path)
         raise HTTPException(400, "Uploaded file is empty")
  
-    # permanent path
-    company_id = current_user["company_id"]
-    doc_dir = f"storage/companies/{company_id}/documents/{document_id}"
-    os.makedirs(doc_dir, exist_ok=True)
- 
-    new_file_path = os.path.join(
-        doc_dir, f"v{document.current_version + 1}_{file.filename}"
-    )
-    shutil.move(temp_path, new_file_path)
- 
-    result = reupload_document_version(
-        db=db,
-        document_id=document_id,
-        file_path=new_file_path,
-        file_name=file.filename,
-        created_by=current_user["user_id"],
-    )
+    try:
+        result = reupload_document_version(
+            db=db,
+            document_id=document_id,
+            temp_path=temp_path,
+            file_name=file.filename,
+            created_by=current_user["user_id"],
+        )
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
  
     return {
         "statusCode": 200,
@@ -578,34 +575,30 @@ def get_template_response(
     )
 
 @router.post("/onlyoffice/callback/{document_id}")
-async def onlyoffice_callback(document_id: int, request: Request):
+async def onlyoffice_callback(
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     body = await request.json()
-   
-    status = body.get("status")
-    if status == 2:
-        return {"error": 0}  # Success response to OnlyOffice
-   
-    return {"error": 0}  # Acknowledge
- 
-@router.api_route("/internal/onlyoffice/storage/{full_path:path}", methods=["GET", "HEAD"])
-def onlyoffice_stream(full_path: str):
-   
-    safe_root = os.path.abspath("storage")
-    abs_path = os.path.abspath(os.path.join("storage", full_path.replace("storage/", "")))
- 
-    if not abs_path.startswith(safe_root):
-        raise HTTPException(status_code=403, detail="Invalid path")
- 
-    if not os.path.exists(abs_path):
-        raise HTTPException(status_code=404, detail="File not found")
- 
-    return FileResponse(
-        path=abs_path,
-        filename=os.path.basename(abs_path),
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "no-cache",
-        },
+
+    payload = verify_onlyoffice_callback(
+        body, request.headers.get("Authorization")
     )
- 
+
+    status = payload.get("status")
+
+    # 2 = editing session closed, 6 = force save during the session
+    if status in (2, 6):
+        download_url = payload.get("url")
+        if not download_url:
+            return {"error": 1}
+
+        save_edited_document(
+            db=db,
+            document_id=document_id,
+            download_url=download_url,
+        )
+
+    return {"error": 0}  # Acknowledge
+

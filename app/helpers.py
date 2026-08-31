@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.services.summary_service import summarizeDocument
 from jobs_store import jobs
-from urllib.parse import quote
+from app.AIhelpers.s3_storage import generateSignedUrl
 
 
 def get_db():
@@ -33,7 +33,7 @@ def get_db():
 
 
 SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret-key")
-BACKEND_BASE_URL = "http://192.168.0.119:8000"
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://localhost:8000").rstrip("/")
 ONLYOFFICE_JWT_SECRET = os.getenv("ONLYOFFICE_JWT_SECRET", "onlyoffice-secret-key")
 ONLYOFFICE_SECRET = os.getenv("ONLYOFFICE_SECRET", "asdf1234!@yash-dev")
 ALGORITHM = "HS256"
@@ -370,10 +370,18 @@ def build_onlyoffice_editor(details, current_user):
         version=file_info["version_number"],
         user_id=current_user["user_id"],
         file_path=file_info["file_path"],
-    )  # /storage/companies/...
-    encoded_path = quote(file_info["file_path"])  # encode spaces
+    )
 
-    # file_url = f"{BACKEND_BASE_URL}{encoded_path}",
+    # OnlyOffice fetches the document straight from S3 via a presigned URL
+    document_url = file_info.get("file_url") or generateSignedUrl(
+        file_info["file_path"]
+    )
+
+    # Key must change whenever the stored file changes, otherwise OnlyOffice
+    # serves its cached copy and edits appear lost after a save.
+    revision = file_info.get("updated_at") or file_info.get("created_at")
+    revision_stamp = int(revision.timestamp()) if revision else 0
+
     print("Uploaded by:", doc_info["uploaded_by"])
     print("Current user:", current_user["user_id"])
     print("Status:", doc_info["status"])
@@ -383,8 +391,10 @@ def build_onlyoffice_editor(details, current_user):
         "document": {
             "fileType": ext,
             "title": file_info["file_name"],
-            "key": f"{doc_info['id']}-{file_info['version_number']}",
-            "url": f"{BACKEND_BASE_URL}{encoded_path}",
+            "key": (
+                f"{doc_info['id']}-{file_info['version_number']}-{revision_stamp}"
+            ),
+            "url": document_url,
             "permissions": {
                 "edit": editable,
                 "download": False,  # disable download permanently

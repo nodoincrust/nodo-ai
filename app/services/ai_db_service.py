@@ -74,6 +74,7 @@ def createChunksForExistingAIDocument(
     """
     from app.AIhelpers.format_helper import iterateFilePages
     from app.AIhelpers.chunk_helper import createDocumentChunks
+    from app.AIhelpers.s3_storage import downloadToTempFile
     from app.db import SessionLocal
     from app.models import AIDocument
     import os
@@ -106,23 +107,29 @@ def createChunksForExistingAIDocument(
                 "message": f"AIDocument has no session_id for documentId={documentId}, versionId={versionId}",
             }
 
-        # Create chunks
-        for pageNumber, rawText, usedOcr in iterateFilePages(filePath):
-            if not rawText or not rawText.strip():
-                continue
+        # filePath is an S3 key; parsers need a real file on disk
+        localPath = downloadToTempFile(filePath)
 
-            ocrUsed |= usedOcr
+        try:
+            for pageNumber, rawText, usedOcr in iterateFilePages(localPath):
+                if not rawText or not rawText.strip():
+                    continue
 
-            created = createDocumentChunks(
-                db=db,
-                ai_document_id=aiDocument.id,
-                session_id=str(aiDocument.session_id),
-                pages=[(pageNumber, rawText)],
-                start_index=lastChunkIndex,
-            )
+                ocrUsed |= usedOcr
 
-            lastChunkIndex += created
-            chunksCreated += created
+                created = createDocumentChunks(
+                    db=db,
+                    ai_document_id=aiDocument.id,
+                    session_id=str(aiDocument.session_id),
+                    pages=[(pageNumber, rawText)],
+                    start_index=lastChunkIndex,
+                )
+
+                lastChunkIndex += created
+                chunksCreated += created
+        finally:
+            if os.path.exists(localPath):
+                os.remove(localPath)
 
         db.commit()
 

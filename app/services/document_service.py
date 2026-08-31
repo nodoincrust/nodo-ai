@@ -1,8 +1,10 @@
 import uuid
 import shutil
+import tempfile
 from jose import jwt
 import os
 import logging
+import requests
 from typing import Dict
 from sqlalchemy.orm import Session
 from app.helpers import normalize_role,build_onlyoffice_editor,generate_file_token
@@ -24,12 +26,16 @@ from app.models import (
 )
 from app.AIhelpers.chunk_helper import chunkText, createDocumentChunks
 from app.AIhelpers.format_helper import iterateFilePages
+from app.AIhelpers.s3_storage import (
+    buildDocumentKey,
+    generateSignedUrl,
+    uploadFile,
+)
 from app.schemas import DocumentSaveSchema
 from app.helpers import build_tracking_timeline,base_shared_query
 
 logger = logging.getLogger(__name__)
 
-BASE_STORAGE_PATH = "storage"
 MAX_UPLOAD_MB = 50
 CHUNK_BATCH_SIZE = 32
 ONLYOFFICE_SECRET = os.getenv("ONLYOFFICE_SECRET","asdf1234!@yash-dev")
@@ -227,6 +233,17 @@ def processDocument(
         db.close()
 
 
+def processDocumentAndCleanup(*, filePath: str, **kwargs) -> None:
+    """Runs AI processing on the temp upload, then removes it from disk."""
+    try:
+        processDocument(filePath=filePath, **kwargs)
+    except Exception as exc:
+        logger.error(f"AI processing failed for {kwargs.get('documentId')}: {exc}")
+    finally:
+        if filePath and os.path.exists(filePath):
+            os.remove(filePath)
+
+
 # Draft + Metadata Save
 def saveDocument(
     db: Session,
@@ -344,27 +361,23 @@ def createDocumentDraft(
     )
     db.add(document)
     db.flush()
-    # Ensure storage path
-    docDir = os.path.join(
-        BASE_STORAGE_PATH,
-        "companies",
-        str(company.id),
-        "documents",
-        str(document.id),
+
+    sizeBytes = os.path.getsize(tempFilePath)
+
+    # Upload to S3; the temp file stays on disk for AI processing
+    s3Key = buildDocumentKey(
+        companyId=company.id,
+        documentId=document.id,
+        version=1,
+        filename=originalFilename,
     )
-    os.makedirs(docDir, exist_ok=True)
-
-    # Move uploaded file into permanent storage
-    permanentPath = os.path.join(docDir, f"v1_{originalFilename}")
-    shutil.move(tempFilePath, permanentPath)
-
-    sizeBytes = os.path.getsize(permanentPath)
+    uploadFile(localPath=tempFilePath, key=s3Key)
 
     # Create Version 1
     version = DocumentVersion(
         document_id=document.id,
         version_number=1,
-        file_path=permanentPath,
+        file_path=s3Key,
         file_name=originalFilename,
         file_size_bytes=sizeBytes,
         created_by=currentUser["user_id"],
@@ -375,6 +388,7 @@ def createDocumentDraft(
 
     # Update document pointer
     document.current_version = 1
+    document.current_file_path = s3Key
 
     # Reduce company space
     company.remaining_space -= sizeBytes
@@ -386,7 +400,7 @@ def createDocumentDraft(
         "document_id": document.id,
         "version_id": version.id,
         "version_number": 1,
-        "file_path": permanentPath,
+        "file_path": s3Key,
     }
 
 
@@ -523,9 +537,12 @@ def get_document_full_details(
         },
         "file": {
             "file_name": version_obj.file_name,
-            "file_path": "/" + version_obj.file_path.replace("\\", "/").lstrip("/"),
+            "file_path": version_obj.file_path,
+            "file_url": generateSignedUrl(version_obj.file_path),
             "file_size_bytes": version_obj.file_size_bytes,
             "version_number": version_obj.version_number,
+            "created_at": version_obj.created_at,
+            "updated_at": version_obj.updated_at,
         },
         "ai": {
             "ai_document_id": ai_document.id if ai_document else None,
@@ -831,7 +848,7 @@ def reject_document_step(
 
 
 def reupload_document_version(
-    db: Session, *, document_id: int, file_path: str, file_name: str, created_by: int
+    db: Session, *, document_id: int, temp_path: str, file_name: str, created_by: int
 ):
     # 1. Fetch last version
     last_version = (
@@ -844,20 +861,38 @@ def reupload_document_version(
     if not last_version:
         raise HTTPException(500, "No base version found")
 
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(404, "Document not found")
+
     # 2. Assign new version number
     new_version_number = last_version.version_number + 1
+
+    size_bytes = os.path.getsize(temp_path)
+
+    s3_key = buildDocumentKey(
+        companyId=document.company_id,
+        documentId=document_id,
+        version=new_version_number,
+        filename=file_name,
+    )
+    uploadFile(localPath=temp_path, key=s3_key)
 
     # 3. Create version entry
     new_version = DocumentVersion(
         document_id=document_id,
         version_number=new_version_number,
-        file_path=file_path,
+        file_path=s3_key,
         file_name=file_name,
-        file_size_bytes=os.path.getsize(file_path),
+        file_size_bytes=size_bytes,
         created_by=created_by,
     )
     db.add(new_version)
     db.flush()
+
+    company = db.query(Company).filter(Company.id == document.company_id).first()
+    if company and company.remaining_space is not None:
+        company.remaining_space -= size_bytes
 
     # 4. Get previous approval steps
     old_steps = (
@@ -913,6 +948,7 @@ def reupload_document_version(
 
     # ==== Update Document Root ====
     doc = db.query(Document).filter(Document.id == document_id).first()
+    doc.current_file_path = s3_key
 
     # if only uploader in chain -> auto approve
     if len(old_steps) == 1:
@@ -925,6 +961,7 @@ def reupload_document_version(
             "message": "Document reuploaded and auto-approved.",
             "version": new_version_number,
             "version_id": new_version.id,
+            "file_path": s3_key,
         }
 
     # Normal chain → now pending
@@ -939,6 +976,7 @@ def reupload_document_version(
         "message": "Reuploaded successfully",
         "version": new_version_number,
         "version_id": new_version.id,
+        "file_path": s3_key,
     }
 
 
@@ -1197,3 +1235,82 @@ def details_editor(*, details, current_user):
     details["editor"] = build_onlyoffice_editor(details, current_user)
 
     return details
+
+
+def verify_onlyoffice_callback(body: dict, auth_header: str | None) -> dict:
+    """Validates the JWT that OnlyOffice attaches to callback requests."""
+    token = body.get("token")
+
+    if not token and auth_header:
+        token = auth_header.replace("Bearer ", "", 1).strip()
+
+    if not token:
+        raise HTTPException(401, "Missing OnlyOffice callback token")
+
+    try:
+        payload = jwt.decode(token, ONLYOFFICE_SECRET, algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(401, "Invalid OnlyOffice callback token")
+
+    # OnlyOffice nests the callback body under "payload" when signing
+    return payload.get("payload", payload)
+
+
+def save_edited_document(db: Session, *, document_id: int, download_url: str) -> Dict:
+    """Overwrites the current version's S3 object with the edited file."""
+    version = (
+        db.query(DocumentVersion)
+        .filter(DocumentVersion.document_id == document_id)
+        .order_by(DocumentVersion.version_number.desc())
+        .first()
+    )
+    if not version:
+        raise HTTPException(404, "No version found for document")
+
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(404, "Document not found")
+
+    previous_size = version.file_size_bytes or 0
+    suffix = os.path.splitext(version.file_name)[1]
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            temp_path = tmp.name
+            with requests.get(download_url, stream=True, timeout=120) as response:
+                response.raise_for_status()
+                shutil.copyfileobj(response.raw, tmp)
+
+        new_size = os.path.getsize(temp_path)
+        if new_size == 0:
+            raise HTTPException(400, "Edited document is empty")
+
+        # Same key on purpose: an edit updates the current version in place
+        uploadFile(localPath=temp_path, key=version.file_path)
+
+        version.file_size_bytes = new_size
+        version.updated_at = datetime.utcnow()
+        document.current_file_path = version.file_path
+
+        company = db.query(Company).filter(Company.id == document.company_id).first()
+        if company and company.remaining_space is not None:
+            company.remaining_space -= new_size - previous_size
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Failed to save edited document {document_id}: {exc}")
+        raise HTTPException(500, "Failed to save edited document")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    return {
+        "document_id": document_id,
+        "version": version.version_number,
+        "file_size_bytes": version.file_size_bytes,
+    }

@@ -374,6 +374,7 @@ class DocumentVersion(Base):
 
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
 
     visibility = Column(String(20), default="PRIVATE")
     public_at = Column(DateTime)

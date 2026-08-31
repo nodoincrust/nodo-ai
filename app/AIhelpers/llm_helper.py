@@ -141,11 +141,12 @@ def askLlm(
             {"role": "user", "content": question},
         ],
         "options": {
-            "temperature": 0.6,
-            "num_predict": 500,
+           "temperature": 0.6,
+            "num_predict": 400,
             "num_ctx": 8192,
+            "num_thread": 4,
             "top_k": 40,
-            "top_p": 0.9
+            "top_p": 0.9,
         },
         "stream": False,
     }

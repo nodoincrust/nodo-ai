@@ -13,6 +13,7 @@ from sqlalchemy import (
     Numeric,
     CheckConstraint,
     UniqueConstraint,
+    Index,
     JSON,
 )
 from sqlalchemy.ext.mutable import MutableList
@@ -262,6 +263,13 @@ class DocumentChunk(Base):
             "ai_document_id",
             "chunk_index",
             name="uq_ai_document_chunk_index",
+        ),
+        Index(
+            "ix_document_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )
 

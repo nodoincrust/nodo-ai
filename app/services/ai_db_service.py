@@ -251,7 +251,7 @@ def semanticSearchChunks(
     return (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
-        .order_by(DocumentChunk.embedding.l2_distance(queryEmbedding))
+        .order_by(DocumentChunk.embedding.cosine_distance(queryEmbedding))
         .limit(limit)
         .all()
     )

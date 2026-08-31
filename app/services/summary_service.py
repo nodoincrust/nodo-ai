@@ -10,14 +10,15 @@ from datetime import datetime, timezone
 
 from app.db import SessionLocal
 from app.models import DocumentChunk, DocumentSummary, AIDocument, DocumentVersion
-from app.AIhelpers.llm_helper import askLlm, RAGHelper
+from app.AIhelpers.llm_helper import askLlm
 from app.services.ai_db_service import getOrCreateSessionForDocument, createChunksForExistingAIDocument
 from app.AIhelpers.chunk_helper import select_top_chunks
 
 logger = logging.getLogger("ai.summaryService")
 
-SUMMARY_TOP_K = 100
-MAX_CONTEXT_CHARS = 30000
+SUMMARY_TOP_K = 30
+MAX_CONTEXT_CHARS = 10000
+SUMMARY_LLM_RETRIES = 1
 
 BASE_SYSTEM_PROMPT = """
 You are an enterprise document intelligence system.
@@ -33,14 +34,6 @@ OUTPUT FORMAT (MANDATORY):
   "tags": ["string"],
   "citations": [{"page_number": number}]
 }
-"""
-
-REFINEMENT_PROMPT = """
-You are an expert editor.
-Refine and expand the previous summary using new document context and similar document examples.
-Improve tag relevance and completeness.
-Keep the same JSON structure.
-Make the summary more comprehensive and professional while staying faithful to the document.
 """
 
 TAG_GUIDANCE = """
@@ -101,7 +94,130 @@ def _fallback_keywords(text: str) -> List[str]:
         return []
 
 SUMMARY_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + "\n" + TAG_GUIDANCE
-def summarizeDocument(documentId: int, version: int, force_refine: bool = False) -> Dict[str, Any]:
+
+
+def _persistSummary(
+    db: Session,
+    *,
+    ai_document_id: int,
+    version_id: int,
+    summary_text: str,
+    tags: List[str],
+    citations: List[Dict[str, Any]],
+    keep_existing_tags: bool,
+) -> DocumentSummary | None:
+    """Creates or updates the stored summary for a document version."""
+    def _apply(record: DocumentSummary) -> None:
+        record.summary_text = summary_text
+        if not keep_existing_tags:
+            record.tags = tags
+        record.citations = citations
+        record.is_self_generated = False
+        record.updated_at = datetime.now(timezone.utc)
+
+    try:
+        existing = (
+            db.query(DocumentSummary)
+            .filter(
+                DocumentSummary.ai_document_id == ai_document_id,
+                DocumentSummary.version_id == version_id,
+            )
+            .first()
+        )
+
+        if existing:
+            _apply(existing)
+        else:
+            existing = DocumentSummary(
+                ai_document_id=ai_document_id,
+                version_id=version_id,
+                summary_text=summary_text,
+                tags=tags,
+                citations=citations,
+                is_self_generated=False,
+            )
+            db.add(existing)
+
+        db.commit()
+        return existing
+
+    except IntegrityError:
+        # Another worker inserted the row first; update it instead.
+        db.rollback()
+        existing = (
+            db.query(DocumentSummary)
+            .filter(
+                DocumentSummary.ai_document_id == ai_document_id,
+                DocumentSummary.version_id == version_id,
+            )
+            .first()
+        )
+        if existing:
+            _apply(existing)
+            db.commit()
+        return existing
+
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Failed to persist summary: {exc}")
+        return None
+
+
+def getStoredSummary(db: Session, *, document_id: int, version: int | None = None):
+    """Returns the stored summary for a document version, if one exists."""
+    version_query = db.query(DocumentVersion).filter(
+        DocumentVersion.document_id == document_id
+    )
+
+    if version is not None:
+        version_obj = version_query.filter(
+            DocumentVersion.version_number == version
+        ).first()
+    else:
+        version_obj = version_query.order_by(
+            DocumentVersion.version_number.desc()
+        ).first()
+
+    if not version_obj:
+        return None
+
+    ai_doc = (
+        db.query(AIDocument)
+        .filter(
+            AIDocument.document_id == document_id,
+            AIDocument.version_id == version_obj.id,
+        )
+        .first()
+    )
+
+    if not ai_doc:
+        return None
+
+    record = (
+        db.query(DocumentSummary)
+        .filter(
+            DocumentSummary.ai_document_id == ai_doc.id,
+            DocumentSummary.version_id == version_obj.id,
+        )
+        .first()
+    )
+
+    if not record:
+        return None
+
+    return {
+        "status": "success",
+        "document_id": document_id,
+        "version": version_obj.version_number,
+        "version_id": version_obj.id,
+        "document_name": ai_doc.filename,
+        "summary": record.summary_text,
+        "tags": record.tags or [],
+        "citations": record.citations or [],
+        "is_self_generated": record.is_self_generated,
+        "updated_at": record.updated_at,
+    }
+def summarizeDocument(documentId: int, version: int) -> Dict[str, Any]:
     db: Session = SessionLocal()
     try:
         version_id = version
@@ -286,23 +402,17 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
             DocumentSummary.version_id == version_id
         ).first()
 
-        is_refinement = force_refine or (existing and existing.summary_text)
+        is_regeneration = bool(existing and existing.summary_text)
 
-        system_prompt = SUMMARY_SYSTEM_PROMPT
-        if is_refinement:
-            system_prompt += "\n" + REFINEMENT_PROMPT
-
-        llm_context = (
-            f"PREVIOUS SUMMARY (if any):\n{existing.summary_text if existing else 'None'}\n\n"
-            f"DOCUMENT EXCERPTS:\n{document_context}"
-        )
+        llm_context = f"DOCUMENT EXCERPTS:\n{document_context}"
 
         logger.info(f"Calling LLM with context length: {len(llm_context)}")
 
         llm_result = askLlm(
             context=llm_context,
-            question="Generate or refine the document summary with tags and citations.",
-            system_prompt=system_prompt,
+            question="Generate the document summary with tags and citations.",
+            system_prompt=SUMMARY_SYSTEM_PROMPT,
+            retries=SUMMARY_LLM_RETRIES,
         )
 
         if llm_result.get("status") != "success":
@@ -330,51 +440,28 @@ def summarizeDocument(documentId: int, version: int, force_refine: bool = False)
 
         citations = parsed.get("citations") or default_citations
 
-        # # 8. Save summary
-        # try:
-        #     if existing:
-        #         existing.summary_text = parsed["summary"]
-        #         existing.tags = tags
-        #         existing.citations = citations
-        #         existing.updated_at = datetime.now(timezone.utc)
-        #     else:
-        #         db.add(
-        #             DocumentSummary(
-        #                 ai_document_id=ai_doc.id,
-        #                 version_id=version_id,
-        #                 summary_text=parsed["summary"],
-        #                 tags=tags,
-        #                 citations=citations,
-        #             )
-        #         )
-        #     db.commit()
+        # 8. Save summary. On a regeneration the existing tags are kept:
+        # tags only change on reupload or an explicit manual edit.
+        if is_regeneration:
+            tags = existing.tags or []
 
-        # except IntegrityError:
-        #     db.rollback()
-        #     # HARD SAFE UPDATE
-        #     existing = db.query(DocumentSummary).filter(
-        #         DocumentSummary.ai_document_id == ai_doc.id,
-        #         DocumentSummary.version_id == version_id,
-        #     ).first()
+        stored = _persistSummary(
+            db,
+            ai_document_id=ai_doc.id,
+            version_id=version_id,
+            summary_text=parsed["summary"],
+            tags=tags,
+            citations=citations,
+            keep_existing_tags=is_regeneration,
+        )
 
-        #     if existing:
-        #         existing.summary_text = parsed["summary"]
-        #         existing.tags = tags
-        #         existing.citations = citations
-        #         existing.updated_at = datetime.now(timezone.utc)
-        #         db.commit()
-
-
-        # # 9. Update embedding (non-critical)
-        # try:
-        #     rag = RAGHelper(db)
-        #     rag.update_summary_embedding(ai_doc.id, parsed["summary"])
-        # except Exception as emb_exc:
-        #     logger.warning(f"Embedding update failed: {emb_exc}")
+        if stored:
+            tags = stored.tags or []
+            citations = stored.citations or []
 
         result = {
             "status": "success",
-            "refined": bool(is_refinement),
+            "refined": bool(is_regeneration),
             "summary": parsed["summary"],
             "document_name":document_name,
             "tags": tags,

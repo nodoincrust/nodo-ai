@@ -8,6 +8,7 @@ from app.controllers.company_controller import router as comproute
 from app.controllers.document_controller import router as docroute
 from app.controllers.employee_controller import router as empRoute
 from app.controllers.department_controller import router as deptroute
+from sqlalchemy import text
 from app.db import engine
 from fastapi.exceptions import RequestValidationError
 from app import models
@@ -40,6 +41,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://15.207.111.65",
     ],  # or specific frontend URLs
     allow_credentials=False,  # MUST be False with "*"
     allow_methods=["*"],
@@ -74,6 +76,17 @@ def greet():
 @app.on_event("startup")
 def startup():
     models.Base.metadata.create_all(bind=engine)
+
+    # create_all skips tables that already exist, so the vector index is
+    # created separately to cover databases created before it was added.
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding_hnsw "
+                "ON document_chunks USING hnsw (embedding vector_cosine_ops) "
+                "WITH (m = 16, ef_construction = 64)"
+            )
+        )
 
 
 # @app.middleware('http')

@@ -43,6 +43,8 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
     if not missing:
         return results
 
+    pending: List[Dict] = []
+
     for item in missing:
         idx = item["index"]
         raw_text = (item["text"] or "").strip()
@@ -53,62 +55,99 @@ def createEmbeddings(texts: List[str]) -> List[List[float]]:
             REDIS.setex(_cache_key(raw_text), CACHE_TTL, json.dumps(vector))
             continue
 
-        alpha_count = sum(ch.isalpha() for ch in raw_text)
-        digit_count = sum(ch.isdigit() for ch in raw_text)
-
-        text = raw_text
-
-        # Numeric / table heavy → normalize to semantic text
-        if digit_count > alpha_count:
-            # Convert tables / rows into descriptive language
-            lines = raw_text.splitlines()[:20]
-
-            semantic_lines = []
-            for line in lines:
-                clean = line.replace("|", " ").replace(",", " ").strip()
-                if clean:
-                    semantic_lines.append(f"Data row containing values: {clean}")
-
-            text = (
-                "The following section contains structured numeric or tabular data. "
-                "It describes measurements, quantities, identifiers, or metrics.\n"
-                + "\n".join(semantic_lines)
-            )
-        if len(text) > 4000:
-            text = text[:4000]
-
-        payload = {
-            "model": EMBED_MODEL,
-            "prompt": text,
-        }
- 
-        try:
-            response = requests.post(
-                EMBED_URL,
-                json=payload,
-                timeout=EMBED_TIMEOUT,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            vector = data.get("embedding")
-            if not vector or len(vector) != EMBED_DIM:
-                raise ValueError("Invalid embedding returned")
-
-        except Exception:
-            logger.exception("Embedding failed for text")
-            vector = [0.0] * EMBED_DIM
-
-        results[idx] = vector
-        REDIS.setex(
-            _cache_key(raw_text),
-            CACHE_TTL,
-            json.dumps(vector),
+        pending.append(
+            {"index": idx, "raw_text": raw_text, "text": _normalizeForEmbedding(raw_text)}
         )
 
-        logger.info("Embedding sample: %s", vector[:5])
+    # Ollama accepts a list of inputs per call, so send them in batches
+    # instead of one HTTP round trip per chunk.
+    for start in range(0, len(pending), MAX_BATCH_SIZE):
+        batch = pending[start : start + MAX_BATCH_SIZE]
+        vectors = _embedBatch([item["text"] for item in batch])
+
+        cachePipe = REDIS.pipeline()
+        for item, vector in zip(batch, vectors):
+            results[item["index"]] = vector
+            cachePipe.setex(
+                _cache_key(item["raw_text"]),
+                CACHE_TTL,
+                json.dumps(vector),
+            )
+        cachePipe.execute()
 
     return results
+
+
+def _normalizeForEmbedding(raw_text: str) -> str:
+    alpha_count = sum(ch.isalpha() for ch in raw_text)
+    digit_count = sum(ch.isdigit() for ch in raw_text)
+
+    text = raw_text
+
+    # Numeric / table heavy → normalize to semantic text
+    if digit_count > alpha_count:
+        lines = raw_text.splitlines()[:20]
+
+        semantic_lines = []
+        for line in lines:
+            clean = line.replace("|", " ").replace(",", " ").strip()
+            if clean:
+                semantic_lines.append(f"Data row containing values: {clean}")
+
+        text = (
+            "The following section contains structured numeric or tabular data. "
+            "It describes measurements, quantities, identifiers, or metrics.\n"
+            + "\n".join(semantic_lines)
+        )
+
+    return text[:4000]
+
+
+def _embedBatch(texts: List[str]) -> List[List[float]]:
+    """Embeds a batch in one call, falling back to per-text calls on failure."""
+    try:
+        response = requests.post(
+            EMBED_URL,
+            json={"model": EMBED_MODEL, "input": texts},
+            timeout=EMBED_TIMEOUT,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        vectors = data.get("embeddings") or []
+        if len(vectors) == len(texts) and all(
+            v and len(v) == EMBED_DIM for v in vectors
+        ):
+            return vectors
+
+        raise ValueError("Invalid batch embedding response")
+
+    except Exception:
+        logger.warning(
+            "Batch embedding failed for %d texts; falling back to single calls",
+            len(texts),
+        )
+        return [_embedSingle(text) for text in texts]
+
+
+def _embedSingle(text: str) -> List[float]:
+    try:
+        response = requests.post(
+            EMBED_URL,
+            json={"model": EMBED_MODEL, "prompt": text},
+            timeout=EMBED_TIMEOUT,
+        )
+        response.raise_for_status()
+        vector = response.json().get("embedding")
+
+        if not vector or len(vector) != EMBED_DIM:
+            raise ValueError("Invalid embedding returned")
+
+        return vector
+
+    except Exception:
+        logger.exception("Embedding failed for text")
+        return [0.0] * EMBED_DIM
 
 def createEmbedding(text: str) -> List[float]:
     return createEmbeddings([text])[0]

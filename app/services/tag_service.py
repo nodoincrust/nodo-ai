@@ -237,18 +237,24 @@ def select_top_chunks(
     db: Session, chunks: List[DocumentChunk], query_text: str, top_k: int = 50
 ) -> List[DocumentChunk]:
 
+    if not chunks:
+        return []
+
+    # Restrict the search to this document; an unscoped vector search would
+    # rank chunks belonging to other documents and companies.
+    ai_document_ids = {c.ai_document_id for c in chunks if c.ai_document_id}
+
     try:
         query_emb = createEmbeddings([query_text])[0]
-        # Use pgvector cosine distance operator
         results = (
             db.query(DocumentChunk)
-            .order_by(
-                DocumentChunk.embedding.op("<->")(query_emb)
-            )  # Use pgvector cosine distance operator
+            .filter(DocumentChunk.ai_document_id.in_(ai_document_ids))
+            .filter(DocumentChunk.embedding.isnot(None))
+            .order_by(DocumentChunk.embedding.cosine_distance(query_emb))
             .limit(top_k)
             .all()
         )
-        return results
+        return results or chunks[:top_k]
     except Exception as e:
         logger.warning(f"Chunk selection failed: {e}; using all chunks")
         return chunks[:top_k]

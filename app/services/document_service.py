@@ -299,12 +299,15 @@ def saveDocument(
         else:
             version_summary.citations = version_summary.citations or []
 
-        # handle self-generated flag safely
+        # handle self-generated flag safely; a manual edit marks the summary
+        # as user-authored so a later regeneration is an explicit choice
         if (
             hasattr(payload, "is_self_generated")
             and payload.is_self_generated is not None
         ):
             version_summary.is_self_generated = payload.is_self_generated
+        elif payload.summary:
+            version_summary.is_self_generated = True
     else:
         version_summary = DocumentSummary(
             ai_document_id=ai_document.id,

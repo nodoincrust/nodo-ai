@@ -15,6 +15,7 @@ from app.services.ai_db_service import (
 )
 from app.services.chat_service import fetchChatHistory
 from app.services.chat_service import chatWithDocument
+from app.services.summary_service import getStoredSummary
 from jobs_store import jobs
 
 router = APIRouter(prefix="/nodo/ai", tags=["AI Features"])
@@ -114,9 +115,79 @@ def start_summary(
             raise
 
     job_id = uuid4().hex
+
+    # Serve the stored summary instead of regenerating it. Regeneration only
+    # happens through the explicit regenerate endpoint.
+    stored = getStoredSummary(db, document_id=documentId, version=document.current_version)
+
+    if stored:
+        jobs[job_id] = {
+            "status": "done",
+            "session_id": session_id,
+            "document_id": documentId,
+            "version": document.current_version,
+            "result": stored,
+        }
+    else:
+        jobs[job_id] = {
+            "status": "running",
+            "session_id": session_id,
+            "document_id": documentId,
+            "version": document.current_version,
+            "result": None,
+        }
+
+        Thread(
+            target=run_summary_job,
+            args=(job_id, documentId, version_id),
+            daemon=True,
+        ).start()
+
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "documentId": documentId,
+        "version": document.current_version,
+    }
+
+
+@router.get("/summary/{documentId}")
+def get_summary(
+    documentId: int,
+    version: int | None = Query(None, description="Version number, defaults to latest"),
+    db: Session = Depends(get_db),
+):
+    stored = getStoredSummary(db, document_id=documentId, version=version)
+
+    if not stored:
+        return {"status": "not_generated", "document_id": documentId}
+
+    return stored
+
+
+@router.post("/summary/regenerate/{documentId}")
+def regenerate_summary(
+    documentId: int,
+    db: Session = Depends(get_db),
+):
+    document = db.query(Document).filter(Document.id == documentId).first()
+    if not document:
+        raise HTTPException(404, "Document not found")
+
+    version = (
+        db.query(DocumentVersion)
+        .filter(
+            DocumentVersion.document_id == documentId,
+            DocumentVersion.version_number == document.current_version,
+        )
+        .first()
+    )
+    if not version:
+        raise HTTPException(404, "Version not found")
+
+    job_id = uuid4().hex
     jobs[job_id] = {
         "status": "running",
-        "session_id": session_id,
         "document_id": documentId,
         "version": document.current_version,
         "result": None,
@@ -124,7 +195,7 @@ def start_summary(
 
     Thread(
         target=run_summary_job,
-        args=(job_id, documentId, version_id),
+        args=(job_id, documentId, version.id),
         daemon=True,
     ).start()
 

@@ -193,7 +193,7 @@ class RAGHelper:
 
         logger.info("RAG query for: %s", text[:100])
 
-        query_embedding = createEmbeddings(text)
+        query_embedding = createEmbeddings([text])[0]
 
         q = self.db.query(DocumentChunk)
 
@@ -206,7 +206,7 @@ class RAGHelper:
         q = q.filter(DocumentChunk.embedding.isnot(None))
 
         results = (
-            q.order_by(DocumentChunk.embedding.op("<->")(query_embedding))
+            q.order_by(DocumentChunk.embedding.cosine_distance(query_embedding))
             .limit(top_k)
             .all()
         )

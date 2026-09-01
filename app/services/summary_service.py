@@ -19,6 +19,7 @@ logger = logging.getLogger("ai.summaryService")
 SUMMARY_TOP_K = 30
 MAX_CONTEXT_CHARS = 10000
 SUMMARY_LLM_RETRIES = 1
+SUMMARY_NUM_PREDICT = 700
 
 BASE_SYSTEM_PROMPT = """
 You are an enterprise document intelligence system.
@@ -413,6 +414,13 @@ def summarizeDocument(documentId: int, version: int) -> Dict[str, Any]:
             question="Generate the document summary with tags and citations.",
             system_prompt=SUMMARY_SYSTEM_PROMPT,
             retries=SUMMARY_LLM_RETRIES,
+            # Ollama constrains the reply to valid JSON rather than leaving it
+            # to the prompt; safeJsonParse stays as a fallback.
+            fmt="json",
+            # The prompt asks for two full paragraphs plus tags and citations.
+            # The old 400-token cap truncated mid-string, which also broke the
+            # JSON parse and produced empty summaries.
+            num_predict=SUMMARY_NUM_PREDICT,
         )
 
         if llm_result.get("status") != "success":

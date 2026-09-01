@@ -1,3 +1,4 @@
+import os
 import redis
 import requests
 import hashlib
@@ -7,14 +8,36 @@ from typing import List, Dict
 
 logger = logging.getLogger("ai.embedding")
 
-REDIS = redis.Redis(host="localhost", port=6379, decode_responses=True)
- 
-EMBED_URL = "http://localhost:11434/api/embeddings"
-EMBED_MODEL = "nomic-embed-text"
+REDIS = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    decode_responses=True,
+)
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+
+# /api/embed is the batch endpoint (takes "input", returns "embeddings").
+# /api/embeddings is the older single-text endpoint (takes "prompt", returns
+# "embedding"). Sending a batch to the latter silently fails, so they are kept
+# distinct here.
+EMBED_BATCH_URL = f"{OLLAMA_BASE_URL}/api/embed"
+EMBED_SINGLE_URL = f"{OLLAMA_BASE_URL}/api/embeddings"
+
+EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 EMBED_DIM = 768
 CACHE_TTL = 86400          # 24 hours
-EMBED_TIMEOUT = 120
+EMBED_TIMEOUT = int(os.getenv("OLLAMA_EMBED_TIMEOUT", "120"))
 MAX_BATCH_SIZE = 48        # Increased for faster batching on powerful system
+
+# Keeps the embedding model resident between batches; without it Ollama unloads
+# it after 5 minutes idle and every ingestion starts with a cold load.
+EMBED_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+try:
+    EMBED_KEEP_ALIVE = int(EMBED_KEEP_ALIVE)
+except (TypeError, ValueError):
+    pass
+
+_batchEndpointAvailable = True
 
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -105,12 +128,31 @@ def _normalizeForEmbedding(raw_text: str) -> str:
 
 def _embedBatch(texts: List[str]) -> List[List[float]]:
     """Embeds a batch in one call, falling back to per-text calls on failure."""
+    global _batchEndpointAvailable
+
+    if not _batchEndpointAvailable:
+        return [_embedSingle(text) for text in texts]
+
     try:
         response = requests.post(
-            EMBED_URL,
-            json={"model": EMBED_MODEL, "input": texts},
+            EMBED_BATCH_URL,
+            json={
+                "model": EMBED_MODEL,
+                "input": texts,
+                "keep_alive": EMBED_KEEP_ALIVE,
+            },
             timeout=EMBED_TIMEOUT,
         )
+
+        if response.status_code == 404:
+            # Ollama predates /api/embed. Stop probing it on every batch.
+            _batchEndpointAvailable = False
+            logger.warning(
+                "Ollama has no /api/embed endpoint; using single-text calls. "
+                "Upgrading Ollama makes ingestion substantially faster."
+            )
+            return [_embedSingle(text) for text in texts]
+
         response.raise_for_status()
         data = response.json()
 
@@ -133,8 +175,12 @@ def _embedBatch(texts: List[str]) -> List[List[float]]:
 def _embedSingle(text: str) -> List[float]:
     try:
         response = requests.post(
-            EMBED_URL,
-            json={"model": EMBED_MODEL, "prompt": text},
+            EMBED_SINGLE_URL,
+            json={
+                "model": EMBED_MODEL,
+                "prompt": text,
+                "keep_alive": EMBED_KEEP_ALIVE,
+            },
             timeout=EMBED_TIMEOUT,
         )
         response.raise_for_status()

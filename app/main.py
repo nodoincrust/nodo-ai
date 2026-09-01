@@ -9,9 +9,11 @@ from app.controllers.document_controller import router as docroute
 from app.controllers.employee_controller import router as empRoute
 from app.controllers.department_controller import router as deptroute
 from sqlalchemy import text
+from threading import Thread
 from app.db import engine
 from fastapi.exceptions import RequestValidationError
 from app import models
+from app.AIhelpers.llm_helper import warmUpModel
 from app.controllers.ai_controller import router as ai_router
 from app.exception_handler import (
     http_exception_handler,
@@ -83,6 +85,10 @@ def startup():
                 "WITH (m = 16, ef_construction = 64)"
             )
         )
+
+    # Load the LLM in the background so the first user request does not wait
+    # for a cold model load. Failures are logged and ignored.
+    Thread(target=warmUpModel, daemon=True).start()
 
 
 # @app.middleware('http')

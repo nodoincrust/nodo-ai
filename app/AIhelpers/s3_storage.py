@@ -3,6 +3,7 @@ import os
 import tempfile
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from dotenv import load_dotenv
 
@@ -24,11 +25,22 @@ def getClient():
     if _client is None:
         if not S3_BUCKET_NAME:
             raise RuntimeError("S3_BUCKET_NAME is not set")
+        if not AWS_REGION:
+            raise RuntimeError("AWS_REGION is not set")
+        # The regional endpoint is pinned on purpose. Falling back to the legacy
+        # global endpoint (s3.amazonaws.com) makes S3 reject presigned URLs with
+        # 400 AuthorizationQueryParametersError, because the signature is scoped
+        # to AWS_REGION while the global endpoint only accepts us-east-1.
         _client = boto3.client(
             "s3",
             region_name=AWS_REGION,
             aws_access_key_id=AWS_ACCESS_KEY_ID,
             aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+            endpoint_url=f"https://s3.{AWS_REGION}.amazonaws.com",
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "virtual"},
+            ),
         )
     return _client
 

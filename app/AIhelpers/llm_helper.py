@@ -245,22 +245,28 @@ def askLlm(
     lastError = "LLM call failed"
 
     for attempt in range(attempts):
-        started = time.monotonic()
+        queued = time.monotonic()
+        started = queued
         try:
             with _slot:
+                # Timed separately: everything before this point is waiting for
+                # a free generation slot, not Ollama being slow.
+                started = time.monotonic()
                 response = _session.post(
                     OLLAMA_URL,
                     json=payload,
                     timeout=REQUEST_TIMEOUT,
                 )
-            response.raise_for_status()
+                response.raise_for_status()
 
             answer = response.json().get("message", {}).get("content", "")
             elapsed = time.monotonic() - started
+            waited = started - queued
 
             logger.info(
-                "LLM ok in %.1fs (ctx=%d chars, num_ctx=%d, out<=%d)",
+                "LLM ok in %.1fs (queued %.1fs, ctx=%d chars, num_ctx=%d, out<=%d)",
                 elapsed,
+                waited,
                 len(optimizedContext),
                 options["num_ctx"],
                 numPredict,
@@ -271,10 +277,12 @@ def askLlm(
         except Exception as exc:
             lastError = _describeError(exc)
             elapsed = time.monotonic() - started
+            waited = started - queued
 
             logger.warning(
-                "LLM call failed after %.1fs (attempt %d/%d): %s",
+                "LLM call failed after %.1fs (queued %.1fs, attempt %d/%d): %s",
                 elapsed,
+                waited,
                 attempt + 1,
                 attempts,
                 lastError,

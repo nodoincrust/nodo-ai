@@ -353,59 +353,74 @@ def askLlmStream(
         "stream": True,
     }
 
-    queued = time.monotonic()
+    # Deliberately does NOT take _slot. This generator stays alive for the whole
+    # HTTP response, so a client that disconnects mid-stream can leave the
+    # semaphore held and starve every later request in the process. Ollama
+    # serialises generation itself via OLLAMA_NUM_PARALLEL, which is where
+    # concurrency for streaming belongs.
+    started = time.monotonic()
+    firstToken = None
     tokens = 0
 
-    with _slot:
-        started = time.monotonic()
-        firstToken = None
+    try:
+        with _session.post(
+            OLLAMA_URL,
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
 
-        try:
-            with _session.post(
-                OLLAMA_URL,
-                json=payload,
-                timeout=REQUEST_TIMEOUT,
-                stream=True,
-            ) as response:
-                response.raise_for_status()
+            for raw in response.iter_lines():
+                if not raw:
+                    continue
 
-                for raw in response.iter_lines():
-                    if not raw:
-                        continue
+                chunk = json.loads(raw)
 
-                    chunk = json.loads(raw)
+                if chunk.get("error"):
+                    raise RuntimeError(chunk["error"])
 
-                    if chunk.get("error"):
-                        raise RuntimeError(chunk["error"])
+                piece = chunk.get("message", {}).get("content", "")
+                if piece:
+                    if firstToken is None:
+                        firstToken = time.monotonic() - started
+                        logger.info(
+                            "LLM stream first token in %.1fs (ctx=%d chars)",
+                            firstToken,
+                            len(optimizedContext),
+                        )
+                    tokens += 1
+                    yield piece
 
-                    piece = chunk.get("message", {}).get("content", "")
-                    if piece:
-                        if firstToken is None:
-                            firstToken = time.monotonic() - started
-                        tokens += 1
-                        yield piece
+                if chunk.get("done"):
+                    break
 
-                    if chunk.get("done"):
-                        break
-
-        except Exception as exc:
-            logger.warning(
-                "LLM stream failed after %.1fs (%d fragments): %s",
-                time.monotonic() - started,
-                tokens,
-                _describeError(exc),
-            )
-            raise
-
+    except GeneratorExit:
+        # Client went away. Close the upstream request rather than leaving it
+        # generating into nothing.
         logger.info(
-            "LLM stream ok in %.1fs (first token %.1fs, queued %.1fs, "
-            "%d fragments, ctx=%d chars)",
+            "LLM stream abandoned by client after %.1fs (%d fragments)",
             time.monotonic() - started,
-            firstToken if firstToken is not None else -1.0,
-            started - queued,
             tokens,
-            len(optimizedContext),
         )
+        raise
+
+    except Exception as exc:
+        logger.warning(
+            "LLM stream failed after %.1fs (%d fragments): %s",
+            time.monotonic() - started,
+            tokens,
+            _describeError(exc),
+        )
+        raise
+
+    logger.info(
+        "LLM stream ok in %.1fs (first token %.1fs, %d fragments, ctx=%d chars)",
+        time.monotonic() - started,
+        firstToken if firstToken is not None else -1.0,
+        tokens,
+        len(optimizedContext),
+    )
 
 
 def warmUpModel() -> None:

@@ -429,13 +429,30 @@ def warmUpModel() -> None:
 
     Safe to call in a daemon thread at startup; failures are logged and ignored.
     """
+    # The options must match what real requests send. Ollama reloads the model
+    # whenever num_ctx or num_thread changes, so warming it with defaults just
+    # makes the first real request pay for a reload instead of a load.
+    options: Dict[str, Any] = {"num_ctx": NUM_CTX}
+    if NUM_THREAD > 0:
+        options["num_thread"] = NUM_THREAD
+
     try:
         _session.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": MODEL, "prompt": "", "keep_alive": KEEP_ALIVE},
+            json={
+                "model": MODEL,
+                "prompt": "",
+                "keep_alive": KEEP_ALIVE,
+                "options": options,
+            },
             timeout=REQUEST_TIMEOUT,
         ).raise_for_status()
-        logger.info("Ollama model %s warmed up", MODEL)
+        logger.info(
+            "Ollama model %s warmed up (num_ctx=%d, num_thread=%s)",
+            MODEL,
+            NUM_CTX,
+            NUM_THREAD or "auto",
+        )
     except Exception as exc:
         logger.warning("Ollama warm-up skipped: %s", _describeError(exc))
 

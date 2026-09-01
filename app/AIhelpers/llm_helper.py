@@ -22,6 +22,12 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_URL = f"{OLLAMA_BASE_URL}/api/chat"
 MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b-instruct-q4_0")
 
+# Chat is latency-critical and answers from retrieved text, which a smaller
+# model handles well. Summaries run in the background and are judged on
+# quality, so they keep the larger model. Both fall back to OLLAMA_MODEL.
+CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", MODEL)
+SUMMARY_MODEL = os.getenv("OLLAMA_SUMMARY_MODEL", MODEL)
+
 # Ollama unloads an idle model after 5 minutes by default, so the next request
 # pays a full load from disk. Keeping it resident is the single biggest latency
 # win on a CPU-only box.
@@ -181,6 +187,7 @@ def askLlm(
     num_predict: Optional[int] = None,
     temperature: Optional[float] = None,
     context_chars: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Dict[str, str]]:
     """
     Generic LLM caller. Caller MUST explicitly pass system_prompt.
@@ -189,6 +196,7 @@ def askLlm(
          to valid JSON instead of hoping the prompt is obeyed.
     context_chars: per-call context budget. Latency-sensitive callers (chat)
          should pass less; background callers (summaries) can afford more.
+    model: overrides OLLAMA_MODEL for this call.
     """
     numPredict = num_predict if num_predict is not None else DEFAULT_NUM_PREDICT
 
@@ -230,7 +238,7 @@ def askLlm(
         options["num_thread"] = NUM_THREAD
 
     payload: Dict[str, Any] = {
-        "model": MODEL,
+        "model": model or MODEL,
         "messages": [
             # Stable content first so Ollama's prefix cache can be reused
             # across requests that share a system prompt.
@@ -310,6 +318,7 @@ def askLlmStream(
     num_predict: Optional[int] = None,
     temperature: Optional[float] = None,
     context_chars: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> Iterator[str]:
     """
     Yields answer fragments as Ollama produces them.
@@ -342,7 +351,7 @@ def askLlmStream(
         options["num_thread"] = NUM_THREAD
 
     payload: Dict[str, Any] = {
-        "model": MODEL,
+        "model": model or MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "system", "content": f"Context:\n{optimizedContext}"},
@@ -425,7 +434,7 @@ def askLlmStream(
 
 def warmUpModel() -> None:
     """
-    Loads the model so the first real request does not pay for it.
+    Loads every configured model so the first real request does not pay for it.
 
     Safe to call in a daemon thread at startup; failures are logged and ignored.
     """
@@ -436,25 +445,30 @@ def warmUpModel() -> None:
     if NUM_THREAD > 0:
         options["num_thread"] = NUM_THREAD
 
-    try:
-        _session.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": MODEL,
-                "prompt": "",
-                "keep_alive": KEEP_ALIVE,
-                "options": options,
-            },
-            timeout=REQUEST_TIMEOUT,
-        ).raise_for_status()
-        logger.info(
-            "Ollama model %s warmed up (num_ctx=%d, num_thread=%s)",
-            MODEL,
-            NUM_CTX,
-            NUM_THREAD or "auto",
-        )
-    except Exception as exc:
-        logger.warning("Ollama warm-up skipped: %s", _describeError(exc))
+    # dict.fromkeys keeps order and drops duplicates when chat and summary
+    # share a model.
+    for name in dict.fromkeys([CHAT_MODEL, SUMMARY_MODEL]):
+        try:
+            _session.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": name,
+                    "prompt": "",
+                    "keep_alive": KEEP_ALIVE,
+                    "options": options,
+                },
+                timeout=REQUEST_TIMEOUT,
+            ).raise_for_status()
+            logger.info(
+                "Ollama model %s warmed up (num_ctx=%d, num_thread=%s)",
+                name,
+                NUM_CTX,
+                NUM_THREAD or "auto",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Ollama warm-up skipped for %s: %s", name, _describeError(exc)
+            )
 
 
 class RAGHelper:

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from app.db import SessionLocal
 from app.models import DocumentChunk, DocumentSummary, AIDocument, DocumentVersion
-from app.AIhelpers.llm_helper import askLlm
+from app.AIhelpers.llm_helper import SUMMARY_MODEL, askLlm
 from app.services.ai_db_service import getOrCreateSessionForDocument, createChunksForExistingAIDocument
 from app.AIhelpers.chunk_helper import select_top_chunks
 
@@ -426,6 +426,7 @@ def summarizeDocument(documentId: int, version: int) -> Dict[str, Any]:
             # Summaries run on a background thread, so they can afford a larger
             # prompt than chat.
             context_chars=MAX_CONTEXT_CHARS,
+            model=SUMMARY_MODEL,
         )
 
         if llm_result.get("status") != "success":

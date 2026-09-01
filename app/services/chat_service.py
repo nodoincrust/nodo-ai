@@ -18,7 +18,7 @@ import json
 from typing import Iterator
 
 from app.AIhelpers.embedding_helper import createEmbedding
-from app.AIhelpers.llm_helper import askLlm, askLlmStream
+from app.AIhelpers.llm_helper import CHAT_MODEL, askLlm, askLlmStream
 from app.services.background_tasks import submitMemoryUpdate
 
 logger = logging.getLogger("ai.chatHistoryService")
@@ -210,6 +210,7 @@ def chatWithDocument(
             system_prompt=CHAT_SYSTEM_PROMPT,
             context_chars=CHAT_CONTEXT_CHARS,
             num_predict=CHAT_NUM_PREDICT,
+            model=CHAT_MODEL,
         )
 
         if llm_result.get("status") != "success":
@@ -282,6 +283,7 @@ def chatWithDocumentStream(
                 system_prompt=CHAT_SYSTEM_PROMPT,
                 context_chars=CHAT_CONTEXT_CHARS,
                 num_predict=CHAT_NUM_PREDICT,
+                model=CHAT_MODEL,
             ):
                 pieces.append(piece)
                 yield event({"type": "token", "v": piece})

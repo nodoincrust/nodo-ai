@@ -14,8 +14,11 @@ from app.models import (
     SessionMessage,
     SessionMemorySummary,DocumentVersion
 )
+import json
+from typing import Iterator
+
 from app.AIhelpers.embedding_helper import createEmbedding
-from app.AIhelpers.llm_helper import askLlm
+from app.AIhelpers.llm_helper import askLlm, askLlmStream
 from app.services.background_tasks import submitMemoryUpdate
 
 logger = logging.getLogger("ai.chatHistoryService")
@@ -95,6 +98,89 @@ def semantic_search_chunks(
         .all()
     )
 
+def _prepareTurn(db: Session, *, ai_doc, session_id: str, query: str):
+    """
+    Records the user message and assembles the prompt context for one turn.
+
+    Shared by the streaming and non-streaming paths so both retrieve identical
+    context and stay comparable when benchmarking.
+    """
+    db.add(
+        SessionMessage(
+            session_id=session_id,
+            document_id=ai_doc.id,
+            role="user",
+            content=query,
+        )
+    )
+    db.commit()
+
+    chat_history = load_recent_chat_history(db, session_id)
+
+    memory = db.query(SessionMemorySummary).filter_by(session_id=session_id).first()
+
+    query_embedding = createEmbedding(query.strip().lower())
+
+    # Sementic search accross the chunks
+    top_chunks = semantic_search_chunks(
+        db,
+        ai_document_id=ai_doc.id,
+        query_embedding=query_embedding,
+        top_k=TOP_K,
+    )
+
+    context_parts = []
+    citations = []
+
+    for c in top_chunks:
+        context_parts.append(f"[PAGE {c.page_number}] {c.chunk_text}")
+        citations.append({"page_number": c.page_number})
+
+    if not context_parts:
+        summary = (
+            db.query(DocumentSummary)
+            .filter(DocumentSummary.ai_document_id == ai_doc.id)
+            .first()
+        )
+
+        if summary and summary.summary_text:
+            context_parts.append(
+                "High-level document summary (may be incomplete):\n"
+                + summary.summary_text
+            )
+            citations = summary.citations or []
+        else:
+            context_parts.append(
+                "The provided document does not contain relevant information."
+            )
+
+    final_context_parts = []
+
+    if memory and memory.summary:
+        final_context_parts.append(
+            f"MEMORY SUMMARY (previous conversation):\n{memory.summary}"
+        )
+
+    if chat_history:
+        final_context_parts.append(f"RECENT CHAT HISTORY:\n{chat_history}")
+
+    final_context_parts.append("DOCUMENT CONTEXT:\n" + "\n\n".join(context_parts))
+
+    return "\n\n".join(final_context_parts), citations
+
+
+def _saveAssistantMessage(db: Session, *, ai_doc, session_id: str, answer: str) -> None:
+    db.add(
+        SessionMessage(
+            session_id=session_id,
+            document_id=ai_doc.id,
+            role="assistant",
+            content=answer,
+        )
+    )
+    db.commit()
+
+
 def chatWithDocument(
     *,
     document_id: int,
@@ -114,68 +200,9 @@ def chatWithDocument(
                 "message": "Document ingestion not completed yet",
             }
 
-        db.add(
-            SessionMessage(
-                session_id=session_id,
-                document_id=ai_doc.id,
-                role="user",
-                content=query,
-            )
+        final_context, citations = _prepareTurn(
+            db, ai_doc=ai_doc, session_id=session_id, query=query
         )
-        db.commit()
-
-        chat_history = load_recent_chat_history(db, session_id)
-
-        memory = db.query(SessionMemorySummary).filter_by(session_id=session_id).first()
-
-        query_embedding = createEmbedding(query.strip().lower())
-
-        # Sementic search accross the chunks
-        top_chunks = semantic_search_chunks(
-            db,
-            ai_document_id=ai_doc.id,
-            query_embedding=query_embedding,
-            top_k=TOP_K,
-        )
-
-        context_parts = []
-        citations = []
-
-        for c in top_chunks:
-            context_parts.append(f"[PAGE {c.page_number}] {c.chunk_text}")
-            citations.append({"page_number": c.page_number})
-
-        if not context_parts:
-            summary = (
-                db.query(DocumentSummary)
-                .filter(DocumentSummary.ai_document_id == ai_doc.id)
-                .first()
-            )
-
-            if summary and summary.summary_text:
-                context_parts.append(
-                    "High-level document summary (may be incomplete):\n"
-                    + summary.summary_text
-                )
-                citations = summary.citations or []
-            else:
-                context_parts.append(
-                    "The provided document does not contain relevant information."
-                )
-
-        final_context_parts = []
-
-        if memory and memory.summary:
-            final_context_parts.append(
-                f"MEMORY SUMMARY (previous conversation):\n{memory.summary}"
-            )
-
-        if chat_history:
-            final_context_parts.append(f"RECENT CHAT HISTORY:\n{chat_history}")
-
-        final_context_parts.append("DOCUMENT CONTEXT:\n" + "\n\n".join(context_parts))
-
-        final_context = "\n\n".join(final_context_parts)
 
         llm_result = askLlm(
             context=final_context,
@@ -193,15 +220,9 @@ def chatWithDocument(
         else:
             answer = llm_result["data"]["answer"]
 
-        db.add(
-            SessionMessage(
-                session_id=session_id,
-                document_id=ai_doc.id,
-                role="assistant",
-                content=answer,
-            )
+        _saveAssistantMessage(
+            db, ai_doc=ai_doc, session_id=session_id, answer=answer
         )
-        db.commit()
 
         submitMemoryUpdate(session_id)
 
@@ -210,6 +231,101 @@ def chatWithDocument(
             "answer": answer,
             "citations": citations,
         }
+
+
+def chatWithDocumentStream(
+    *,
+    document_id: int,
+    session_id: str,
+    query: str,
+) -> Iterator[str]:
+    """
+    Same retrieval as chatWithDocument, but emits NDJSON as the model writes.
+
+    One JSON object per line:
+      {"type":"token","v":"..."}                      repeated
+      {"type":"done","text":...,"citations":[...]}    once, at the end
+      {"type":"error","message":"..."}                instead, on failure
+
+    The final event carries the complete answer, so a client that only wants
+    the whole reply can ignore the tokens and read "text".
+    """
+
+    def event(payload: dict) -> str:
+        return json.dumps(payload, ensure_ascii=False) + "\n"
+
+    with SessionLocal() as db:
+
+        ai_doc = (
+            db.query(AIDocument).filter(AIDocument.document_id == document_id).first()
+        )
+
+        if not ai_doc:
+            yield event(
+                {
+                    "type": "error",
+                    "message": "Document ingestion not completed yet",
+                }
+            )
+            return
+
+        final_context, citations = _prepareTurn(
+            db, ai_doc=ai_doc, session_id=session_id, query=query
+        )
+
+        pieces = []
+
+        try:
+            for piece in askLlmStream(
+                context=final_context,
+                question=query,
+                system_prompt=CHAT_SYSTEM_PROMPT,
+                context_chars=CHAT_CONTEXT_CHARS,
+                num_predict=CHAT_NUM_PREDICT,
+            ):
+                pieces.append(piece)
+                yield event({"type": "token", "v": piece})
+
+        except Exception:
+            logger.exception("Streaming chat failed")
+
+            # Persist whatever arrived so the history is not left with a user
+            # message and no reply.
+            if pieces:
+                _saveAssistantMessage(
+                    db,
+                    ai_doc=ai_doc,
+                    session_id=session_id,
+                    answer="".join(pieces),
+                )
+
+            yield event(
+                {
+                    "type": "error",
+                    "message": (
+                        "I’m unable to answer that question based on the "
+                        "document right now."
+                    ),
+                }
+            )
+            return
+
+        answer = "".join(pieces)
+
+        _saveAssistantMessage(
+            db, ai_doc=ai_doc, session_id=session_id, answer=answer
+        )
+
+        submitMemoryUpdate(session_id)
+
+        yield event(
+            {
+                "type": "done",
+                "text": answer,
+                "citations": citations,
+                "session_id": str(session_id),
+            }
+        )
 
  
 def fetchChatHistory(

@@ -1,6 +1,7 @@
 # app/controllers/ai_controller.py
 
 from fastapi import APIRouter, Depends, HTTPException, Path,Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from uuid import uuid4
 from threading import Thread
@@ -14,7 +15,7 @@ from app.services.ai_db_service import (
     createChunksForExistingAIDocument
 )
 from app.services.chat_service import fetchChatHistory
-from app.services.chat_service import chatWithDocument
+from app.services.chat_service import chatWithDocument, chatWithDocumentStream
 from app.services.summary_service import getStoredSummary
 from jobs_store import jobs
 
@@ -41,6 +42,33 @@ def chatApi(*, document_id: int, query: str):
         "answer": result["answer"],
         "citations": result.get("citations", []),
     }
+
+
+@router.get("/chat/stream")
+def chatStreamApi(*, document_id: int, query: str):
+    """
+    Streaming twin of /chat. Emits NDJSON so the answer appears as it is
+    written instead of after the full generation. /chat is unchanged.
+    """
+    if not document_id:
+        raise HTTPException(400, "document_id is required")
+
+    session_id = getOrCreateSessionForDocument(document_id)
+
+    return StreamingResponse(
+        chatWithDocumentStream(
+            document_id=document_id,
+            session_id=session_id,
+            query=query,
+        ),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            # nginx buffers proxied responses by default, which would hold the
+            # whole answer back and defeat streaming entirely.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/summary/start/{documentId}")

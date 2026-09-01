@@ -1,9 +1,10 @@
+import json
 import os
 import re
 import threading
 import time
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 from sqlalchemy.orm import Session
@@ -299,6 +300,112 @@ def askLlm(
 
     # Unreachable, but never return None to callers that immediately .get().
     return {"status": "error", "data": {"answer": lastError}}
+
+
+def askLlmStream(
+    *,
+    context: str,
+    question: str,
+    system_prompt: str,
+    num_predict: Optional[int] = None,
+    temperature: Optional[float] = None,
+    context_chars: Optional[int] = None,
+) -> Iterator[str]:
+    """
+    Yields answer fragments as Ollama produces them.
+
+    Text only, and deliberately not retried: a stream that fails halfway has
+    already sent tokens to the client, so restarting it would duplicate them.
+    Callers wanting structured output should use askLlm with fmt="json" —
+    partial JSON cannot be parsed, so streaming it buys nothing.
+
+    Raises on failure; the caller decides how to surface that mid-stream.
+    """
+    numPredict = num_predict if num_predict is not None else DEFAULT_NUM_PREDICT
+
+    optimizedContext = optimizeContext(
+        context,
+        context_chars if context_chars is not None else CONTEXT_CHAR_BUDGET,
+    )
+
+    options: Dict[str, Any] = {
+        "temperature": (
+            temperature if temperature is not None else DEFAULT_TEMPERATURE
+        ),
+        "num_predict": numPredict,
+        "num_ctx": NUM_CTX,
+        "top_k": 40,
+        "top_p": 0.9,
+    }
+
+    if NUM_THREAD > 0:
+        options["num_thread"] = NUM_THREAD
+
+    payload: Dict[str, Any] = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"Context:\n{optimizedContext}"},
+            {"role": "user", "content": question},
+        ],
+        "options": options,
+        "keep_alive": KEEP_ALIVE,
+        "stream": True,
+    }
+
+    queued = time.monotonic()
+    tokens = 0
+
+    with _slot:
+        started = time.monotonic()
+        firstToken = None
+
+        try:
+            with _session.post(
+                OLLAMA_URL,
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+                stream=True,
+            ) as response:
+                response.raise_for_status()
+
+                for raw in response.iter_lines():
+                    if not raw:
+                        continue
+
+                    chunk = json.loads(raw)
+
+                    if chunk.get("error"):
+                        raise RuntimeError(chunk["error"])
+
+                    piece = chunk.get("message", {}).get("content", "")
+                    if piece:
+                        if firstToken is None:
+                            firstToken = time.monotonic() - started
+                        tokens += 1
+                        yield piece
+
+                    if chunk.get("done"):
+                        break
+
+        except Exception as exc:
+            logger.warning(
+                "LLM stream failed after %.1fs (%d fragments): %s",
+                time.monotonic() - started,
+                tokens,
+                _describeError(exc),
+            )
+            raise
+
+        logger.info(
+            "LLM stream ok in %.1fs (first token %.1fs, queued %.1fs, "
+            "%d fragments, ctx=%d chars)",
+            time.monotonic() - started,
+            firstToken if firstToken is not None else -1.0,
+            started - queued,
+            tokens,
+            len(optimizedContext),
+        )
 
 
 def warmUpModel() -> None:

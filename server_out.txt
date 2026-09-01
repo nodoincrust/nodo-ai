@@ -1,0 +1,205 @@
+warning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+xxxxONLYOFFICE_SECRET asdf1234!@yash-dev
+INFO:     127.0.0.1:55755 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58959 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54735 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60112 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49219 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61339 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49335 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64698 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64301 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59940 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59942 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50891 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60240 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60162 - "POST /nodo/request-otp?email=akash%40gmail.com HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60163 - "POST /nodo/verify-otp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64353 - "POST /nodo/request-otp?email=akash%40gmail.com HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64354 - "POST /nodo/verify-otp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49975 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57639 - "POST /nodo/request-otp?email=akash%40gmail.com HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57640 - "POST /nodo/verify-otp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57642 - "POST /nodo/company/getDepartments HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49950 - "OPTIONS /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49950 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55797 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52306 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57123 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60736 - "GET /nodo/ai/summary/status/c4571d18f1654defa7c7d2ee95f15e38 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58783 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59058 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49994 - "OPTIONS /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55257 - "OPTIONS /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/237/v1_sample_construction_company_noc.pdf
+Generated file token: f9978c44-a06c-4aaa-9465-79ec647fe550
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:49994 - "GET /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/237/v1_sample_construction_company_noc.pdf
+Generated file token: e87c5274-91ca-45a6-a178-695a339f0b37
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:49994 - "GET /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49994 - "OPTIONS /nodo/ai/chat/history/237 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55257 - "OPTIONS /nodo/ai/summary/start/237?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49994 - "GET /nodo/ai/chat/history/237 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54071 - "POST /nodo/ai/summary/start/237?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56801 - "OPTIONS /nodo/ai/summary/status/7762885a5a1f42bc86d2f9d51b8b2a37 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56801 - "GET /nodo/ai/summary/status/7762885a5a1f42bc86d2f9d51b8b2a37 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56801 - "OPTIONS /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61965 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50060 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50060 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+/storage/companies/24/documents/237/v1_sample_construction_company_noc.pdf
+Generated file token: 40cce2f2-800d-43d3-9be4-5bdc4a5cb611
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:53543 - "GET /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/237/v1_sample_construction_company_noc.pdf
+Generated file token: feb2417c-1760-4878-adad-3c72c1c2be71
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:53543 - "GET /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53543 - "POST /nodo/ai/summary/start/237?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53543 - "GET /nodo/ai/chat/history/237 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52433 - "OPTIONS /nodo/ai/summary/status/4d6775254bc84cebaae5205cba78f033 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52433 - "GET /nodo/ai/summary/status/4d6775254bc84cebaae5205cba78f033 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52885 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52885 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62675 - "OPTIONS /nodo/newdocuments/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62675 - "POST /nodo/newdocuments/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65375 - "OPTIONS /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62547 - "OPTIONS /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65161 - "OPTIONS /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65375 - "POST /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: 62f04e66-c132-4311-b39e-1999ba921d01
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:62675 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58804 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58804 - "OPTIONS /nodo/ai/chat/history/238 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65161 - "GET /nodo/ai/chat/history/238 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65375 - "POST /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: 4dfbe0cb-428d-40a0-8455-340b4f3856cb
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:62675 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65332 - "OPTIONS /nodo/ai/summary/status/1179fbd4e2fa477d93dcba7d4b3a7799 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65332 - "GET /nodo/ai/summary/status/1179fbd4e2fa477d93dcba7d4b3a7799 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54118 - "GET /nodo/ai/summary/status/1179fbd4e2fa477d93dcba7d4b3a7799 HTTP/1.1" 200 OK
+Chunk creation failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.
+Chunk creation failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.
+Chunk creation failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.
+INFO:     127.0.0.1:49735 - "GET /nodo/ai/summary/status/1179fbd4e2fa477d93dcba7d4b3a7799 HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: fd10c945-85c9-451b-8b19-93451b9ccd2f
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:60866 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: 73dbd1dd-6973-4ece-b64c-1a5874c1ef05
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:60866 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60866 - "POST /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53355 - "GET /nodo/ai/chat/history/238 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51550 - "OPTIONS /nodo/ai/summary/status/663475bebb604213ae31f9795af44411 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51550 - "GET /nodo/ai/summary/status/663475bebb604213ae31f9795af44411 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50108 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50108 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+/storage/companies/24/documents/237/v1_sample_construction_company_noc.pdf
+Generated file token: 209aa7ed-1880-4477-b30a-2464ec32a630
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:50108 - "GET /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/237/v1_sample_construction_company_noc.pdf
+Generated file token: 805d66a0-abff-4505-bd35-ef872f6227d8
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:50108 - "GET /nodo/newdocuments/237/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50108 - "POST /nodo/ai/summary/start/237?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50108 - "GET /nodo/ai/chat/history/237 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64170 - "GET /nodo/ai/summary/status/663475bebb604213ae31f9795af44411 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64170 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51927 - "GET /nodo/employee/documents?page=1&size=10 HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: 641f5ca2-56d4-4e0e-873b-bb303a79eaf1
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:51927 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: 55991e60-bc6f-4060-a7a1-b8c8cd08f74a
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:51927 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51927 - "GET /nodo/ai/chat/history/238 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64170 - "POST /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+Chunk creation failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.
+INFO:     127.0.0.1:60566 - "OPTIONS /nodo/ai/summary/status/5810ed388b0a4dea8c9713476858a4e3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60566 - "GET /nodo/ai/summary/status/5810ed388b0a4dea8c9713476858a4e3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60484 - "GET /nodo/ai/summary/status/663475bebb604213ae31f9795af44411 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60484 - "OPTIONS /nodo/ai/summary/status/78d6a3ce88fc4173a5dca8e3a2526ed7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60484 - "GET /nodo/ai/summary/status/78d6a3ce88fc4173a5dca8e3a2526ed7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52862 - "GET /nodo/ai/summary/status/78d6a3ce88fc4173a5dca8e3a2526ed7 HTTP/1.1" 200 OK
+Chunk creation failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: dd13b520-b6e0-4a32-bc60-668356684b9b
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:59411 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: c2f1370d-a8a9-43d4-9e45-822c30457d52
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:59411 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59411 - "GET /nodo/ai/chat/history/238 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59666 - "POST /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52349 - "OPTIONS /nodo/ai/summary/status/63bc1aa59a3e45ab89ccce66d62dc4c6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52349 - "GET /nodo/ai/summary/status/63bc1aa59a3e45ab89ccce66d62dc4c6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57992 - "GET /nodo/ai/summary/status/63bc1aa59a3e45ab89ccce66d62dc4c6 HTTP/1.1" 200 OK
+Chunk creation failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.
+INFO:     127.0.0.1:58316 - "GET /nodo/ai/summary/status/63bc1aa59a3e45ab89ccce66d62dc4c6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57258 - "GET /storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53804 - "GET /api/documents/123/download%22 HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:53804 - "GET /favicon.ico HTTP/1.1" 405 Method Not Allowed
+INFO:     127.0.0.1:60373 - "OPTIONS /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61257 - "OPTIONS /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: 05e39dee-536b-4ae9-bcda-0f85102b4904
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:60373 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+/storage/companies/24/documents/238/v1_Student_Learning_Platform_Hosting_HLD_Assumptions.xlsx
+Generated file token: 78e3cdd6-6382-47d8-9bd2-cef4f9276a7f
+Uploaded by: 52
+Current user: 52
+Status: DRAFT
+INFO:     127.0.0.1:60373 - "GET /nodo/newdocuments/238/details HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60373 - "OPTIONS /nodo/ai/chat/history/238 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61257 - "OPTIONS /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60373 - "GET /nodo/ai/chat/history/238 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53287 - "POST /nodo/ai/summary/start/238?version=1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53569 - "OPTIONS /nodo/ai/summary/status/e5a6d31266bc475aae0a0f32ae2f03e7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53569 - "GET /nodo/ai/summary/status/e5a6d31266bc475aae0a0f32ae2f03e7 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62225 - "GET /nodo/ai/summary/status/e5a6d31266bc475aae0a0f32ae2f03e7 HTTP/1.1" 200 OK
+Chunk creation failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.
+INFO:     127.0.0.1:56369 - "GET /nodo/ai/summary/status/e5a6d31266bc475aae0a0f32ae2f03e7 HTTP/1.1" 200 OK

@@ -26,8 +26,10 @@ logger = logging.getLogger("ai.chatHistoryService")
 TOP_K = 4  # number of chunks to retrieve
 MAX_CHAT_HISTORY = 6  # recent messages only
 
-CHAT_CONTEXT_CHARS = 3000
-CHAT_NUM_PREDICT = 300
+# Generation costs ~32x more per token than reading context on this hardware,
+# so the answer length is the latency dial, not the context size.
+CHAT_CONTEXT_CHARS = 5000   # ~1600 tokens, ~9s to read
+CHAT_NUM_PREDICT = 160      # ~30s to write, the bulk of the wait
 
 CHAT_SYSTEM_PROMPT = """
 You are a document-grounded AI ASSISTANT.
@@ -38,6 +40,7 @@ Rules:
 - Answer ONLY using the provided document context
 - Do NOT output JSON
 - Be concise, factual, and helpful
+- Answer in at most 3-4 sentences unless the user asks for more detail
 - If the information is not present in the document, say so clearly
 """
 

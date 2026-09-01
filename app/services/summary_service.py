@@ -19,7 +19,9 @@ logger = logging.getLogger("ai.summaryService")
 SUMMARY_TOP_K = 12
 MAX_CONTEXT_CHARS = 6000
 SUMMARY_LLM_RETRIES = 1
-SUMMARY_NUM_PREDICT = 600
+# Two paragraphs plus tags and citations fit in ~450 tokens. At ~5.4 tok/s
+# that is ~85s of generation, which a background job can absorb.
+SUMMARY_NUM_PREDICT = 450
 
 BASE_SYSTEM_PROMPT = """
 You are an enterprise document intelligence system.

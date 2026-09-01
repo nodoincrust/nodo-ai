@@ -39,7 +39,9 @@ def _parseKeepAlive(raw: str):
 KEEP_ALIVE = _parseKeepAlive(os.getenv("OLLAMA_KEEP_ALIVE", "30m"))
 
 REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "240"))
-DEFAULT_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "384"))
+# Generation is the expensive half (~5.4 tok/s here), so this is the main
+# latency dial: roughly 1 second of wait per 5 tokens allowed.
+DEFAULT_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
 DEFAULT_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.4"))
 
 # Fixed on purpose. Ollama reloads the model whenever num_ctx changes, so a
@@ -55,10 +57,12 @@ NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", "0"))
 # gets slower.
 MAX_CONCURRENCY = int(os.getenv("OLLAMA_MAX_CONCURRENCY", "2"))
 
-# Sized for latency, not for the context window. On 4 CPU cores a 3B model
-# spends far longer evaluating the prompt than generating the answer, so the
-# prompt is the thing to keep small. Roughly 4000 chars ~= 1300 tokens.
-CONTEXT_CHAR_BUDGET = int(os.getenv("OLLAMA_CONTEXT_CHARS", "4000"))
+# Measured on the 4-vCPU host: prompt evaluation runs at ~175 tok/s while
+# generation runs at ~5.4 tok/s. Reading context is therefore ~32x cheaper per
+# token than writing the answer, so context can be generous and num_predict is
+# the setting that actually controls latency. Roughly 5000 chars ~= 1600
+# tokens ~= 9s of prompt evaluation.
+CONTEXT_CHAR_BUDGET = int(os.getenv("OLLAMA_CONTEXT_CHARS", "5000"))
 
 _slot = threading.BoundedSemaphore(MAX_CONCURRENCY)
 

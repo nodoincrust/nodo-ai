@@ -20,8 +20,14 @@ from app.services.background_tasks import submitMemoryUpdate
 
 logger = logging.getLogger("ai.chatHistoryService")
 
-TOP_K = 20  # number of chunks to retrieve
-MAX_CHAT_HISTORY = 15  # recent messages only
+# Chunks are ~1024 words each, so each one is a large slice of prompt. On a
+# CPU-only box the model spends longer reading the prompt than writing the
+# answer, which makes a high TOP_K the main cause of slow chat replies.
+TOP_K = 4  # number of chunks to retrieve
+MAX_CHAT_HISTORY = 6  # recent messages only
+
+CHAT_CONTEXT_CHARS = 3000
+CHAT_NUM_PREDICT = 300
 
 CHAT_SYSTEM_PROMPT = """
 You are a document-grounded AI ASSISTANT.
@@ -172,6 +178,8 @@ def chatWithDocument(
             context=final_context,
             question=query,
             system_prompt=CHAT_SYSTEM_PROMPT,
+            context_chars=CHAT_CONTEXT_CHARS,
+            num_predict=CHAT_NUM_PREDICT,
         )
 
         if llm_result.get("status") != "success":

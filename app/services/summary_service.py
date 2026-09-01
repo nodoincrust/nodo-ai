@@ -16,10 +16,10 @@ from app.AIhelpers.chunk_helper import select_top_chunks
 
 logger = logging.getLogger("ai.summaryService")
 
-SUMMARY_TOP_K = 30
-MAX_CONTEXT_CHARS = 10000
+SUMMARY_TOP_K = 12
+MAX_CONTEXT_CHARS = 6000
 SUMMARY_LLM_RETRIES = 1
-SUMMARY_NUM_PREDICT = 700
+SUMMARY_NUM_PREDICT = 600
 
 BASE_SYSTEM_PROMPT = """
 You are an enterprise document intelligence system.
@@ -421,6 +421,9 @@ def summarizeDocument(documentId: int, version: int) -> Dict[str, Any]:
             # The old 400-token cap truncated mid-string, which also broke the
             # JSON parse and produced empty summaries.
             num_predict=SUMMARY_NUM_PREDICT,
+            # Summaries run on a background thread, so they can afford a larger
+            # prompt than chat.
+            context_chars=MAX_CONTEXT_CHARS,
         )
 
         if llm_result.get("status") != "success":

@@ -38,9 +38,14 @@ def _parseKeepAlive(raw: str):
 
 KEEP_ALIVE = _parseKeepAlive(os.getenv("OLLAMA_KEEP_ALIVE", "30m"))
 
-REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
-DEFAULT_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "512"))
+REQUEST_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "240"))
+DEFAULT_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "384"))
 DEFAULT_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.4"))
+
+# Fixed on purpose. Ollama reloads the model whenever num_ctx changes, so a
+# per-request value silently costs a full reload every time chat and summary
+# alternate. Keep prompts inside this window via CONTEXT_CHAR_BUDGET instead.
+NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
 
 # 0 lets Ollama match the host's core count instead of guessing.
 NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", "0"))
@@ -50,10 +55,10 @@ NUM_THREAD = int(os.getenv("OLLAMA_NUM_THREAD", "0"))
 # gets slower.
 MAX_CONCURRENCY = int(os.getenv("OLLAMA_MAX_CONCURRENCY", "2"))
 
-# Safety net for callers that do not cap their own context.
-CONTEXT_CHAR_BUDGET = int(os.getenv("OLLAMA_CONTEXT_CHARS", "12000"))
-
-_CONTEXT_SIZES = (2048, 4096, 8192, 16384)
+# Sized for latency, not for the context window. On 4 CPU cores a 3B model
+# spends far longer evaluating the prompt than generating the answer, so the
+# prompt is the thing to keep small. Roughly 4000 chars ~= 1300 tokens.
+CONTEXT_CHAR_BUDGET = int(os.getenv("OLLAMA_CONTEXT_CHARS", "4000"))
 
 _slot = threading.BoundedSemaphore(MAX_CONCURRENCY)
 
@@ -120,19 +125,9 @@ def _estimateTokens(text: str) -> int:
     return max(1, len(text) // 3)
 
 
-def _resolveNumCtx(prompt: str, numPredict: int) -> int:
-    """
-    Sizes the KV cache to the actual prompt instead of always asking for 8192.
-
-    A fixed oversized window costs memory and setup time on every request.
-    """
-    needed = _estimateTokens(prompt) + numPredict + 256
-
-    for size in _CONTEXT_SIZES:
-        if needed <= size:
-            return size
-
-    return _CONTEXT_SIZES[-1]
+def _fitsContextWindow(prompt: str, numPredict: int) -> bool:
+    """True when the prompt plus the reservation for output fits in NUM_CTX."""
+    return _estimateTokens(prompt) + numPredict + 128 <= NUM_CTX
 
 
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
@@ -180,16 +175,22 @@ def askLlm(
     fmt: Optional[Any] = None,
     num_predict: Optional[int] = None,
     temperature: Optional[float] = None,
+    context_chars: Optional[int] = None,
 ) -> Dict[str, Dict[str, str]]:
     """
     Generic LLM caller. Caller MUST explicitly pass system_prompt.
 
     fmt: pass "json" (or a JSON schema dict) to make Ollama constrain the reply
          to valid JSON instead of hoping the prompt is obeyed.
+    context_chars: per-call context budget. Latency-sensitive callers (chat)
+         should pass less; background callers (summaries) can afford more.
     """
     numPredict = num_predict if num_predict is not None else DEFAULT_NUM_PREDICT
 
-    optimizedContext = optimizeContext(context)
+    optimizedContext = optimizeContext(
+        context,
+        context_chars if context_chars is not None else CONTEXT_CHAR_BUDGET,
+    )
 
     if len(optimizedContext) < len(context.strip()):
         logger.info(
@@ -198,14 +199,24 @@ def askLlm(
             len(optimizedContext),
         )
 
+    prompt = system_prompt + optimizedContext + question
+
+    if not _fitsContextWindow(prompt, numPredict):
+        logger.warning(
+            "Prompt (~%d tokens) plus %d output tokens exceeds num_ctx=%d; "
+            "the model will drop the oldest content. Lower "
+            "OLLAMA_CONTEXT_CHARS or raise OLLAMA_NUM_CTX.",
+            _estimateTokens(prompt),
+            numPredict,
+            NUM_CTX,
+        )
+
     options: Dict[str, Any] = {
         "temperature": (
             temperature if temperature is not None else DEFAULT_TEMPERATURE
         ),
         "num_predict": numPredict,
-        "num_ctx": _resolveNumCtx(
-            system_prompt + optimizedContext + question, numPredict
-        ),
+        "num_ctx": NUM_CTX,
         "top_k": 40,
         "top_p": 0.9,
     }

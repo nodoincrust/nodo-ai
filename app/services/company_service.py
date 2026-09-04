@@ -1,10 +1,17 @@
 from sqlalchemy.orm import Session, joinedload
 from fastapi import HTTPException
 from sqlalchemy import or_, func
-from app.models import User, Department, Designation
-from app.enum import UserRole
+from app.models import User, Department, Designation, Role
+from app.enum import UserRole, UserType
 from app.schemas import CreateDepartmentSchema, UpdateDeptSchema, UpdateEmployeeSchema
-from app.helpers import get_employee_scoped
+from app.helpers import get_employee_scoped, enum_or_str
+from app.services.role_service import (
+    get_role_by_id,
+    role_summary,
+    sync_legacy_user_role,
+    validate_assignable_role,
+)
+from app.services.role_seed_service import seed_company_roles
 
 
 def add_dept_service(payload: CreateDepartmentSchema, db: Session, current_user: dict):
@@ -431,17 +438,43 @@ def add_employee_service(payload, db: Session, current_user: dict):
                     detail="You can assign reporting manager only from your department",
                 )
 
+    company_id = current_user["company_id"]
+    seed_company_roles(db, company_id)
+
+    if getattr(payload, "role_id", None):
+        assigned_role = validate_assignable_role(
+            db,
+            role_id=payload.role_id,
+            company_id=company_id,
+            user_type=UserType.COMPANY,
+        )
+    else:
+        assigned_role = (
+            db.query(Role)
+            .filter(
+                Role.company_id == company_id,
+                Role.template_key == "EMPLOYEE",
+                Role.is_delete.is_(False),
+            )
+            .first()
+        )
+        if not assigned_role:
+            raise HTTPException(status_code=400, detail="Default Employee role missing")
+
     try:
         user = User(
             name=payload.name,
             email=payload.email,
-            company_id=current_user["company_id"],
+            company_id=company_id,
             department_id=department_id,
             reports_to=payload.reports_to,
             designation=payload.designation,
             role=UserRole.EMPLOYEE,
+            role_id=assigned_role.id,
+            user_type=UserType.COMPANY,
             is_active=payload.is_active,
         )
+        sync_legacy_user_role(user, assigned_role)
 
         db.add(user)
         db.commit()
@@ -450,7 +483,16 @@ def add_employee_service(payload, db: Session, current_user: dict):
         return {
             "statusCode": 200,
             "message": "Employee added successfully",
-            "data": {"user_id": user.id, "department_id": user.department_id},
+            "data": {
+                "id": user.id,
+                "user_id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "department_id": user.department_id,
+                "user_type": enum_or_str(user.user_type, UserType.COMPANY.value),
+                "company_id": user.company_id,
+                "role": role_summary(assigned_role),
+            },
         }
 
     except Exception:
@@ -535,14 +577,35 @@ def update_employee_service(
 
         employee.designation = payload.designation
 
+    assigned_role = None
+    if getattr(payload, "role_id", None) is not None:
+        assigned_role = validate_assignable_role(
+            db,
+            role_id=payload.role_id,
+            company_id=current_user["company_id"],
+            user_type=UserType.COMPANY,
+        )
+        sync_legacy_user_role(employee, assigned_role)
+
     try:
         db.commit()
         db.refresh(employee)
+        if assigned_role is None and employee.role_id:
+            assigned_role = get_role_by_id(db, employee.role_id)
 
         return {
             "statusCode": 200,
             "message": "Employee details updated successfully",
-            "data": {"id": employee.id, "name": employee.name, "email": employee.email},
+            "data": {
+                "id": employee.id,
+                "name": employee.name,
+                "email": employee.email,
+                "user_type": enum_or_str(
+                    getattr(employee, "user_type", None), UserType.COMPANY.value
+                ),
+                "company_id": employee.company_id,
+                "role": role_summary(assigned_role),
+            },
         }
 
     except Exception:

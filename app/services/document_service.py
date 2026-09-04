@@ -24,6 +24,8 @@ from app.models import (
     DocumentWorkflowRun,
     User,ShareDocument
 )
+from app.enum import UserRole
+from app.services.role_service import get_role_by_id, is_company_admin_role
 from app.AIhelpers.chunk_helper import chunkText, createDocumentChunks
 from app.AIhelpers.format_helper import iterateFilePages
 from app.AIhelpers.s3_storage import (
@@ -632,6 +634,26 @@ def approve_document_step(
         document.current_step_order = next_step.step_order
         db.commit()
         return {"message": "Approved. Moving to next approver."}
+
+    # Final document status APPROVED only when Company Admin completes the chain.
+    approver = db.query(User).filter(User.id == user_id).first()
+    approver_role = (
+        get_role_by_id(db, approver.role_id)
+        if approver and approver.role_id
+        else None
+    )
+    is_final_admin = is_company_admin_role(approver_role) or (
+        approver is not None and approver.role == UserRole.COMPANY_ADMIN
+    )
+    if not is_final_admin:
+        document.status = "UNDER_REVIEW"
+        document.current_assignee_id = None
+        document.current_step_order = None
+        db.commit()
+        return {
+            "message": "Approved. Awaiting Company Admin for final approval.",
+        }
+
     # Final approval
     workflow = (
         db.query(DocumentWorkflowRun)

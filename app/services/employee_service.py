@@ -12,6 +12,13 @@ from app.models import (
     DocumentSummary,
     DocumentApprovalStep,
     DocumentWorkflowRun,
+    Role,
+)
+from app.services.role_service import (
+    get_company_admin_role,
+    get_role_by_id,
+    is_company_admin_role,
+    walk_reporting_role_chain,
 )
 
 
@@ -160,103 +167,103 @@ def get_documents_service(
 
 
 def get_assignable_users(db: Session, current_user: dict):
+    """Users eligible for document assignment based on reporting-role chain.
+
+    Walks upward from the caller's role. Levels with no active users are skipped.
+    Company Admin is always included when present.
+    """
     company_id = current_user["company_id"]
-    department_id = current_user["department_id"]
+    department_id = current_user.get("department_id")
     user_id = current_user["user_id"]
 
-    role = UserRole(current_user["role"])  # normalize
+    caller_role = None
+    if current_user.get("role_id"):
+        caller_role = get_role_by_id(db, current_user["role_id"])
 
-    base_users = db.query(User).filter(
-        User.company_id == company_id,
-        User.is_active.is_(True),
-        User.is_delete.is_(False),
-        User.id != user_id,
-    )
+    # Self entry
+    self_order = 0
+    self_role_name = current_user.get("role")
+    if caller_role:
+        self_role_name = caller_role.name
 
-    # Case 1: Company Admin can only assign themselves
-    if role == UserRole.COMPANY_ADMIN:
-        return {
-            "statusCode": 200,
-            "data": [
-                {
-                    "user_id": current_user["user_id"],
-                    "role": current_user["role"],
-                    "name": current_user["name"],
-                    "is_department_head": False,
-                    "order": ROLE_ORDER[UserRole.COMPANY_ADMIN],
-                    "self": True,
-                }
-            ],
+    data = [
+        {
+            "user_id": user_id,
+            "name": current_user["name"],
+            "role": self_role_name,
+            "role_id": current_user.get("role_id"),
+            "is_department_head": current_user.get("is_department_head", False),
+            "order": self_order,
+            "self": True,
         }
+    ]
 
-    # Case 2: Department Head
-    elif role == UserRole.DEPARTMENT_HEAD:
-        users = base_users.filter(
-            or_(
-                User.department_id == department_id,
-                User.role == UserRole.COMPANY_ADMIN,
-            )
-        ).all()
+    if caller_role and is_company_admin_role(caller_role):
+        return {"statusCode": 200, "data": data}
 
-    # Case 3: Employee (fallback logic added here)
-    else:
-        dept = (
-            db.query(Department)
-            .filter(
-                Department.id == department_id,
-                Department.company_id == company_id,
-            )
-            .first()
-        )
+    chain = walk_reporting_role_chain(db, caller_role) if caller_role else []
 
-        # Fallback when no department head assigned
-        if not dept or not dept.head_user_id:
-            # fallback to company admins only (highest hierarchy)
-            users = base_users.filter(User.role == UserRole.COMPANY_ADMIN).all()
-        else:
-            # normal: fallback head + company admin
-            users = base_users.filter(
-                or_(
-                    User.id == dept.head_user_id,
-                    User.role == UserRole.COMPANY_ADMIN,
+    # Legacy fallback when role_id not linked yet
+    if not chain:
+        role = UserRole(current_user["role"])
+        if role == UserRole.COMPANY_ADMIN:
+            return {"statusCode": 200, "data": data}
+        admin_role = get_company_admin_role(db, company_id)
+        if admin_role:
+            chain = [admin_role]
+        if role == UserRole.EMPLOYEE:
+            dh = (
+                db.query(Role)
+                .filter(
+                    Role.company_id == company_id,
+                    Role.template_key == "DEPARTMENT_HEAD",
+                    Role.is_delete.is_(False),
                 )
-            ).all()
+                .first()
+            )
+            if dh:
+                chain = [dh] + chain
 
-    # build self entry
-    self_entry = {
-        "user_id": current_user["user_id"],
-        "name": current_user["name"],
-        "role": role,
-        "is_department_head": current_user.get("is_department_head", False),
-        "order": ROLE_ORDER[role],
-        "self": True,
-    }
-
-    data = [self_entry]
-
-    for u in users:
-        # determine effective role
-        is_dept_head = dept is not None and u.id == getattr(dept, "head_user_id", None)
-
-        if u.role == UserRole.COMPANY_ADMIN:
-            effective_role = UserRole.COMPANY_ADMIN
-        elif is_dept_head:
-            effective_role = UserRole.DEPARTMENT_HEAD
-        else:
-            effective_role = UserRole.EMPLOYEE
-
-        data.append(
-            {
-                "user_id": u.id,
-                "name": u.name,
-                "role": effective_role,
-                "is_department_head": is_dept_head,
-                "order": ROLE_ORDER[effective_role],
-            }
+    order = 1
+    seen_users = {user_id}
+    for role in chain:
+        users_q = db.query(User).filter(
+            User.company_id == company_id,
+            User.role_id == role.id,
+            User.is_active.is_(True),
+            User.is_delete.is_(False),
+            User.id != user_id,
         )
+        # Prefer same department for non-admin roles when caller has a department
+        if department_id and not is_company_admin_role(role):
+            dept_users = users_q.filter(User.department_id == department_id).all()
+            users = dept_users if dept_users else users_q.all()
+        else:
+            users = users_q.all()
+
+        # Skip empty levels
+        if not users:
+            continue
+
+        for u in users:
+            if u.id in seen_users:
+                continue
+            seen_users.add(u.id)
+            data.append(
+                {
+                    "user_id": u.id,
+                    "name": u.name,
+                    "role": role.name,
+                    "role_id": role.id,
+                    "is_department_head": role.template_key == "DEPARTMENT_HEAD",
+                    "order": order,
+                    "self": False,
+                }
+            )
+        order += 1
 
     return {
-        "status": 200,
+        "statusCode": 200,
         "data": sorted(data, key=lambda x: x["order"]),
     }
 
@@ -317,7 +324,12 @@ def assign_document(
     db.add(workflow)
     db.flush()
 
-    if current_user["role"] == "COMPANY_ADMIN":
+    if current_user.get("role_id"):
+        uploader_role = get_role_by_id(db, current_user["role_id"])
+        effective_uploader_role = (
+            uploader_role.name if uploader_role else current_user["role"]
+        )
+    elif current_user["role"] == "COMPANY_ADMIN":
         effective_uploader_role = "COMPANY_ADMIN"
     elif current_user.get("is_department_head", False):
         effective_uploader_role = "DEPARTMENT_HEAD"
@@ -354,31 +366,64 @@ def assign_document(
 
     user_map = {u.id: u for u in users}
 
-    for idx, user_id in enumerate(assignee_ids):
+    # Sort assignees by reporting-role distance from Company Admin (lower first).
+    admin_role = get_company_admin_role(db, current_user["company_id"])
+
+    def _role_depth(user: User) -> int:
+        role = get_role_by_id(db, user.role_id) if user.role_id else None
+        if not role:
+            if user.role == UserRole.COMPANY_ADMIN:
+                return 999
+            if user.role == UserRole.DEPARTMENT_HEAD:
+                return 500
+            return 100
+        if is_company_admin_role(role):
+            return 999
+        depth = 0
+        current = role
+        seen = set()
+        while current and current.reporting_role_id:
+            if current.id in seen:
+                break
+            seen.add(current.id)
+            depth += 1
+            current = get_role_by_id(db, current.reporting_role_id)
+        return depth
+
+    ordered_ids = sorted(assignee_ids, key=lambda uid: _role_depth(user_map[uid]))
+
+    # Ensure a Company Admin is last in the chain when one exists and was not selected.
+    has_admin = any(
+        is_company_admin_role(get_role_by_id(db, user_map[uid].role_id))
+        if user_map[uid].role_id
+        else user_map[uid].role == UserRole.COMPANY_ADMIN
+        for uid in ordered_ids
+    )
+    if not has_admin and admin_role:
+        admin_user = (
+            db.query(User)
+            .filter(
+                User.company_id == current_user["company_id"],
+                User.role_id == admin_role.id,
+                User.is_active.is_(True),
+                User.is_delete.is_(False),
+            )
+            .first()
+        )
+        if admin_user and admin_user.id not in ordered_ids:
+            ordered_ids.append(admin_user.id)
+            user_map[admin_user.id] = admin_user
+
+    for user_id in ordered_ids:
         status = "PENDING"
         user = user_map[user_id]
-        is_dept_head = False
-        if hasattr(user, "is_department_head"):
-            is_dept_head = getattr(user, "is_department_head", False)
-
-        if not is_dept_head:
-            dept = (
-                db.query(Department)
-                .filter(
-                    Department.id == user.department_id,
-                    Department.head_user_id == user.id,
-                )
-                .first()
-            )
-            if dept:
-                is_dept_head = True
-
-        if user.role == "COMPANY_ADMIN":
+        role = get_role_by_id(db, user.role_id) if user.role_id else None
+        if role:
+            effective_role = role.name
+        elif user.role == UserRole.COMPANY_ADMIN:
             effective_role = "COMPANY_ADMIN"
-        elif is_dept_head:
-            effective_role = "DEPARTMENT_HEAD"
         else:
-            effective_role = "EMPLOYEE"
+            effective_role = user.role.value if hasattr(user.role, "value") else str(user.role)
 
         db.add(
             DocumentApprovalStep(
@@ -393,7 +438,7 @@ def assign_document(
         step_order += 1
 
     document.status = "SUBMITTED"
-    document.current_assignee_id = assignee_ids[0]
+    document.current_assignee_id = ordered_ids[0]
     document.current_step_order = 2
     document.current_version = version.version_number
     workflow.workflow_status = "IN_PROGRESS"

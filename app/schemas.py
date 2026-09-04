@@ -154,6 +154,7 @@ class CreateEmployeeSchema(BaseModel):
     department_id: Optional[int] = None
     designation: str = Field(..., max_length=255)
     reports_to: Optional[int] = None
+    role_id: Optional[int] = None
     is_active: bool
 
 
@@ -163,7 +164,30 @@ class UpdateEmployeeSchema(BaseModel):
     department_id: Optional[int] = None
     reports_to: Optional[int] = None
     designation: Optional[str]
+    role_id: Optional[int] = None
     is_active: bool
+
+
+class RoleListRequest(BaseModel):
+    search: Optional[str] = ""
+    page: int = 1
+    pagelimit: int = 10
+
+
+class RolePermissionWrite(BaseModel):
+    # Prefer menu_key (same integer as login sidebar "id"); sidebar_menu_id also accepted.
+    menu_key: Optional[int] = None
+    sidebar_menu_id: Optional[int] = None
+    selected: bool = True
+    add: bool = False
+    edit: bool = False
+    delete: bool = False
+
+
+class RoleUpsertSchema(BaseModel):
+    name: str = Field(..., max_length=100)
+    reporting_role_id: Optional[int] = None
+    permissions: List[RolePermissionWrite] = []
 
 
 class UpdateEmployeeStatusSchema(BaseModel):

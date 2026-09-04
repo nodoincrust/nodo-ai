@@ -10,22 +10,22 @@ from app.models import (
     OTPLogin,
     Company,
     Department,
-    RoleSidebarMapping,
-    SidebarMenu,
     DocumentVersion,
     Document,
 )
-from app.enum import UserRole
+from app.enum import UserRole, UserType
 from app.schemas import CreateCompanySchema, UpdateCompanySchema
 from app.helpers import (
     otp_generate,
     otp_expiry,
     send_otp_email,
-    resolve_ui_role,
     gb_to_bytes,
     bytes_to_gb,
     bytes_to_mb,
+    enum_or_str,
 )
+from app.services.role_seed_service import seed_company_roles
+from app.services.role_service import get_company_admin_role, role_summary
 from datetime import datetime, timedelta
 from fastapi import HTTPException
 from jose import jwt
@@ -75,39 +75,36 @@ def request_otp_service(email: str, background_tasks: BackgroundTasks, db: Sessi
         raise HTTPException(status_code=500, detail="Failed to generate OTP")
 
 
-def get_sidebar_for_user(db: Session, role: str):
+def get_sidebar_for_user(db: Session, role_id: int | None):
+    """Build login sidebar from the user's role_id + role_permissions."""
     try:
-        menus = (
-            db.query(SidebarMenu)
-            .join(RoleSidebarMapping)
-            .filter(RoleSidebarMapping.role == role, SidebarMenu.is_active.is_(True))
-            .order_by(SidebarMenu.sort_order.asc())
-            .all()
-        )
+        from app.services.role_service import get_sidebar_for_role_id
 
-        return [
-            {
-                "id": m.menu_key,
-                "label": m.label,
-                "path": m.path,
-                "icon": m.icon,
-                "icon_active": m.icon_active,
-            }
-            for m in menus
-        ]
-
+        return get_sidebar_for_role_id(db, role_id)
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to load sidebar menus")
 
 # this function is for verify otp it verifies otp based on db entry it takes email 
 # to fetch otp and compares the request otp and db otp is same if it matches then it will return token,sidebarmenu,info etc
 def verify_otp_service(email: str, otp: str, db: Session):
-    user = db.query(User).filter(User.email == email, User.is_active.is_(True)).first()
+    user = db.query(User).filter(User.email == email, User.is_active.is_(True), User.is_delete.is_(False)).first()
     if not user:
         raise HTTPException(
             status_code=404,
             detail="The provided credentials do not correspond to any registered user.",
         )
+
+    if user.company_id:
+        company = (
+            db.query(Company)
+            .filter(Company.id == user.company_id, Company.is_delete.is_(False))
+            .first()
+        )
+        if not company or not company.is_active:
+            raise HTTPException(
+                status_code=403,
+                detail="Company is inactive or deleted. Login is not allowed.",
+            )
 
     otp_entry = (
         db.query(OTPLogin)
@@ -147,10 +144,20 @@ def verify_otp_service(email: str, otp: str, db: Session):
 
         expire = datetime.utcnow() + timedelta(days=7)
         # expire = datetime.utcnow() + timedelta(minutes=2)
+        user_type = enum_or_str(
+            getattr(user, "user_type", None),
+            default=(
+                UserType.SYSTEM.value
+                if user.role == UserRole.SYSTEM_ADMIN
+                else UserType.COMPANY.value
+            ),
+        )
         payload = {
             "user_id": user.id,
             "company_id": user.company_id,
             "role": user.role.value,
+            "role_id": user.role_id,
+            "user_type": user_type,
             "name": user.name,
             "email": user.email,
             "exp": expire,
@@ -159,8 +166,7 @@ def verify_otp_service(email: str, otp: str, db: Session):
         }
         token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-        ui_role = resolve_ui_role(payload)
-        sidebar = get_sidebar_for_user(db, ui_role)
+        sidebar = get_sidebar_for_user(db, user.role_id)
         # static implemetation
         storage = {"is_storage_show": False}
 
@@ -263,11 +269,16 @@ def create_company_service(
         db.add(company)
         db.flush()
 
+        roles = seed_company_roles(db, company.id)
+        admin_role = roles.get("COMPANY_ADMIN")
+
         user = User(
             company_id=company.id,
             name=payload.contact_person,
             email=payload.contact_email,
             role=UserRole.COMPANY_ADMIN,
+            role_id=admin_role.id if admin_role else None,
+            user_type=UserType.COMPANY,
             is_active=True,
         )
 
@@ -277,7 +288,11 @@ def create_company_service(
         return {
             "statusCode": 200,
             "message": "Company added successfully",
-            "data": {"company_id": company.id, "company_admin_user_id": user.id},
+            "data": {
+                "company_id": company.id,
+                "company_admin_user_id": user.id,
+                "role": role_summary(admin_role),
+            },
         }
 
     except Exception:
@@ -450,16 +465,29 @@ def update_company_details(
             status_code=403, detail="You are not allowed to update this company"
         )
 
-    # Fetch company admin
+    # Fetch company admin (prefer role_id / template; fallback to enum)
     company_admin = (
         db.query(User)
         .filter(
             User.company_id == companyId,
-            User.role == UserRole.COMPANY_ADMIN,
             User.is_delete.is_(False),
+            User.role == UserRole.COMPANY_ADMIN,
         )
         .first()
     )
+    admin_role = get_company_admin_role(db, companyId)
+    if admin_role:
+        by_role = (
+            db.query(User)
+            .filter(
+                User.company_id == companyId,
+                User.role_id == admin_role.id,
+                User.is_delete.is_(False),
+            )
+            .first()
+        )
+        if by_role:
+            company_admin = by_role
 
     if not company_admin:
         raise HTTPException(status_code=404, detail="Company admin user not found")
@@ -529,6 +557,11 @@ def update_company_details(
         if payload.contact_email is not None:
             company.contact_email = payload.contact_email
             company_admin.email = payload.contact_email
+
+        if admin_role and company_admin.role_id != admin_role.id:
+            company_admin.role_id = admin_role.id
+            company_admin.role = UserRole.COMPANY_ADMIN
+            company_admin.user_type = UserType.COMPANY
 
         db.commit()
         db.refresh(company)

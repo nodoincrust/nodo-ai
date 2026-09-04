@@ -76,6 +76,8 @@ def get_current_user(
     name = payload.get("name")
     role = payload.get("role")
     department_id = payload.get("department_id")
+    role_id = payload.get("role_id")
+    user_type = payload.get("user_type")
     if not user_id or not role:
         raise HTTPException(status_code=401, detail="Invalid token payload")
     department = None
@@ -91,10 +93,16 @@ def get_current_user(
             .first()
         )
     is_department_head = department is not None and department.head_user_id == user_id
+    if user_type is None:
+        user_type = (
+            "SYSTEM" if role == UserRole.SYSTEM_ADMIN.value else "COMPANY"
+        )
     current_user = {
         "user_id": user_id,
         "company_id": company_id,
         "role": role,
+        "role_id": role_id,
+        "user_type": user_type,
         "name": name,
         "department_id": department.id if department else None,
         "is_department_head": is_department_head,
@@ -113,8 +121,9 @@ def get_employee_scoped(db: Session, emp_id: int, current_user: dict):
     query = db.query(User).filter(
         User.id == emp_id,
         User.company_id == current_user["company_id"],
-        User.role == UserRole.EMPLOYEE,
         User.is_delete.is_(False),
+        User.role != UserRole.COMPANY_ADMIN,
+        User.role != UserRole.SYSTEM_ADMIN,
     )
     if current_user.get("is_department_head"):
         query = query.filter(User.department_id == current_user["department_id"])
@@ -145,6 +154,13 @@ def bytes_to_gb(byte_size: int) -> float:
 
 def bytes_to_mb(byte_size: int) -> float:
     return round(byte_size / MB, 2)
+
+
+def enum_or_str(value, default=None):
+    """Normalize SQLAlchemy Enum / PGEnum / plain str to a string value."""
+    if value is None:
+        return default
+    return value.value if hasattr(value, "value") else str(value)
 
 
 def resolve_hierarchy(db: Session, current_user: dict):

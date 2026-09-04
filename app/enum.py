@@ -8,6 +8,16 @@ class UserRole(str, Enum):
     EMPLOYEE = "EMPLOYEE"
 
 
+class UserType(str, Enum):
+    SYSTEM = "SYSTEM"
+    COMPANY = "COMPANY"
+
+
+class RoleScope(str, Enum):
+    SYSTEM = "SYSTEM"
+    COMPANY = "COMPANY"
+
+
 class DocumentStatus(str, Enum):
     DRAFT = "DRAFT"
     SUBMITTED = "SUBMITTED"

@@ -25,7 +25,88 @@ from app.db import Base
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from pgvector.sqlalchemy import Vector
 from app.db import Base
-from app.enum import UserRole,ShareTargetType
+from app.enum import UserRole, ShareTargetType, UserType, RoleScope
+
+role_scope_pg = PGEnum(
+    "SYSTEM",
+    "COMPANY",
+    name="role_scope_enum",
+    create_type=False,
+)
+user_type_pg = PGEnum(
+    "SYSTEM",
+    "COMPANY",
+    name="user_type_enum",
+    create_type=False,
+)
+
+
+class RoleTemplate(Base):
+    __tablename__ = "role_templates"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    template_key = Column(String(50), unique=True, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    scope = Column(role_scope_pg, nullable=False, index=True)
+    is_editable = Column(Boolean, default=True, nullable=False)
+    is_hidden_from_list = Column(Boolean, default=False, nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
+    reporting_template_key = Column(String(50), nullable=True)
+    default_permissions = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    company_id = Column(
+        BigInteger, ForeignKey("companies.id"), nullable=True, index=True
+    )
+    scope = Column(role_scope_pg, nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    template_key = Column(String(50), nullable=True, index=True)
+    reporting_role_id = Column(
+        BigInteger, ForeignKey("roles.id"), nullable=True, index=True
+    )
+    is_editable = Column(Boolean, default=True, nullable=False)
+    is_hidden_from_list = Column(Boolean, default=False, nullable=False)
+    is_delete = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+
+    reporting_role = relationship("Role", remote_side=[id], foreign_keys=[reporting_role_id])
+    permissions = relationship(
+        "RolePermission",
+        back_populates="role",
+        cascade="all, delete-orphan",
+    )
+    company = relationship("Company", foreign_keys=[company_id])
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    __table_args__ = (
+        UniqueConstraint("role_id", "sidebar_menu_id", name="uq_role_sidebar_menu"),
+    )
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    role_id = Column(
+        BigInteger, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sidebar_menu_id = Column(
+        BigInteger,
+        ForeignKey("sidebar_menus.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    view = Column(Boolean, default=False, nullable=False)
+    add = Column(Boolean, default=False, nullable=False)
+    edit = Column(Boolean, default=False, nullable=False)
+    delete = Column(Boolean, default=False, nullable=False)
+
+    role = relationship("Role", back_populates="permissions")
+    menu = relationship("SidebarMenu")
 
 
 class User(Base):
@@ -39,7 +120,16 @@ class User(Base):
         nullable=True,
     )
 
+    # Legacy enum kept during migration; prefer role_id for authorization.
     role = Column(Enum(UserRole, name="user_role_enum"), nullable=False, index=True)
+    role_id = Column(BigInteger, ForeignKey("roles.id"), nullable=True, index=True)
+    user_type = Column(
+        user_type_pg,
+        nullable=False,
+        default="COMPANY",
+        server_default="COMPANY",
+        index=True,
+    )
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_delete = Column(Boolean, default=False, nullable=False, index=True)
 
@@ -58,6 +148,8 @@ class User(Base):
         back_populates="users",
         foreign_keys=[company_id],
     )
+
+    assigned_role = relationship("Role", foreign_keys=[role_id])
 
     manager = relationship("User", remote_side=[id])
 
@@ -342,13 +434,16 @@ class SidebarMenu(Base):
     __tablename__ = "sidebar_menus"
 
     id = Column(BigInteger, primary_key=True)
-    menu_key = Column(String(50), unique=True, nullable=False)
+    # Live DB uses integer menu_key (returned as sidebar "id" on login).
+    menu_key = Column(Integer, unique=True, nullable=False)
     label = Column(String(100), nullable=False)
     path = Column(String(255), nullable=False)
     icon = Column(Text)
     icon_active = Column(Text)
     sort_order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
+    # SYSTEM | COMPANY | BOTH — which Role Management scope can assign this menu
+    scope = Column(String(20), nullable=False, default="COMPANY", server_default="COMPANY")
 
 
 class RoleSidebarMapping(Base):

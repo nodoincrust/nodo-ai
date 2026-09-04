@@ -114,10 +114,8 @@ def menus_for_scope(db: Session, scope: RoleScope | str) -> list[SidebarMenu]:
 
 def menu_payload(menu: SidebarMenu) -> dict:
     return {
-        "menu_key": menu.menu_key,
         "sidebar_menu_id": menu.id,
         "label": menu.label,
-        "path": menu.path,
         "actions": ACTIONS,
     }
 

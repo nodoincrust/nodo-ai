@@ -8,6 +8,7 @@ from app.db import SessionLocal
 from app.schemas import DocumentAssignSchema
 from sqlalchemy.orm import Session
 from app.helpers import get_current_user
+from app.permissions import require_company_scope, require_menu_permission
 
 
 router = APIRouter(prefix="/nodo/employee")
@@ -30,6 +31,8 @@ def getDocumentList(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     return get_documents_service(
         db=db,
         current_user=current_user,
@@ -45,6 +48,8 @@ def get_assignable_hierarchy(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "edit")
     return get_assignable_users(db, current_user)
 
 
@@ -55,6 +60,8 @@ def assign_doc(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "edit")
     assign_document(
         db=db,
         document_id=document_id,

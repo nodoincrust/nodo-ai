@@ -21,6 +21,7 @@ import tempfile
 import os
 from app.models import Document
 from app.helpers import get_db, get_current_user
+from app.permissions import require_company_scope, require_menu_permission
 from app.schemas import (
     DocumentSaveSchema,
     GetApprovalDocumentList,
@@ -91,7 +92,9 @@ async def uploadDocument(
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
- 
+    require_company_scope(currentUser)
+    require_menu_permission(db, currentUser, "documents", "add")
+
     suffix = os.path.splitext(file.filename)[1] or ".pdf"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -177,6 +180,8 @@ def saveDocumentApi(
     db: Session = Depends(get_db),
     currentUser=Depends(get_current_user),
 ):
+    require_company_scope(currentUser)
+    require_menu_permission(db, currentUser, "documents", "edit")
     result = saveDocument(
         db=db,
         documentId=documentId,
@@ -198,6 +203,8 @@ def get_document_details(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     details = get_document_full_details(
             db=db,
             document_id=document_id,
@@ -225,6 +232,8 @@ def approve_document(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "edit")
     result = approve_document_step(
         db=db,
         document_id=document_id,
@@ -244,6 +253,8 @@ def reject_document(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "edit")
     remarks = payload.get("reason") if payload else None
     print("remarks-----------", remarks)
     result = reject_document_step(
@@ -266,6 +277,8 @@ async def reupload_document(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "add")
     # only uploader can reupload
     from app.models import Document
  
@@ -316,6 +329,8 @@ def approver_inbox(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     print("asdfghjkl", payload.dict())
     return get_approver_inbox(
         db=db,
@@ -333,6 +348,8 @@ def createBouquetEndpoint(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "add")
     return createBouquet(
         db=db,
         name=payload.name,
@@ -347,6 +364,8 @@ def getAllBoq(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "view")
     return getAllBoqList(db=db, current_user=current_user, filters=filters)
 
 
@@ -357,6 +376,8 @@ def update_bouquet(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "edit")
     return update_boq_details(
         db=db, current_user=current_user, payload=payload, bouquetId=bouquetId
     )
@@ -366,7 +387,10 @@ def update_bouquet(
 def getBouquet(
     bouquetId: int,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "view")
     result = getBouquetById(db, bouquetId)
 
     if not result:
@@ -381,6 +405,8 @@ def deleteBouquetEndpoint(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "delete")
     return deleteBouquet(
         db=db,
         bouquetId=bouquetId,
@@ -395,6 +421,8 @@ def get_bouquet_documents(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "view")
     return get_bouquet_documents_service(
         db=db, current_user=current_user, bouquetId=bouquetId, filters=filters
     )
@@ -405,7 +433,10 @@ def append_documents(
     bouquetId: int,
     payload: AppendDocumentsSchema,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "edit")
     return append_documents_to_bouquet(
         db=db, bouquetId=bouquetId, documentIds=payload.documentIds
     )
@@ -418,6 +449,8 @@ def remove_documents(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "bouquets", "edit")
     return removeDocumentFromBouquet(
         db=db,
         current_user=current_user,
@@ -432,6 +465,8 @@ def get_approved_documents(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     return get_approved_documents_service(
         db=db, current_user=current_user, filters=filters
     )
@@ -468,7 +503,8 @@ async def convert_pdf_to_docx(file: UploadFile = File(...)):
 def share(payload:ShareRequest,
           db:Session=Depends(get_db),
           current_user=Depends(get_current_user)):
-    
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "shared_workspace", "add")
     return share_docboq_service(db,current_user,payload)
 
 @router.post("/sharedDocument")
@@ -477,6 +513,8 @@ def get_shared_documents(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "shared_workspace", "view")
 
     if payload.key not in ["doc", "boq", "template"]:
         raise HTTPException(
@@ -514,7 +552,9 @@ def save_template(
     db:Session = Depends(get_db),
     current_user:dict = Depends(get_current_user)
     
-):   
+):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "templates", "add")
     print(payload)
     return createTemplate(db=db,payload=payload,current_user=current_user)
 
@@ -523,17 +563,21 @@ def save_template(
 def get_templates(payload:getTemplate,db:Session = Depends(get_db), 
                   current_user:dict =Depends(get_current_user)                  
                   ):
+                    require_company_scope(current_user)
+                    require_menu_permission(db, current_user, "templates", "view")
                     return get_templates_list(db,current_user=current_user,payload=payload)
     
 
 @router.post("/templatesFeilds/{template_id}")
 def get_templatesFeilds(template_id:int,db:Session= Depends(get_db),current_user:dict=Depends(get_current_user)):
-    
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "templates", "view")
     return get_templates_feilds(db,current_user=current_user,template_id=template_id)
 
 @router.delete("/deleteTemplate/{templateID}")
 def delete_template(templateID:int,db:Session=Depends(get_db),current_user:dict=Depends(get_current_user)):
-    
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "templates", "delete")
     return delete_templates_service(db,current_user=current_user,templateID=templateID)
 
 
@@ -544,6 +588,8 @@ def submit_template(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "templates", "add")
     payload_dict = json.loads(payload)
 
     return submit_template_form(
@@ -555,6 +601,8 @@ def submit_template(
 
 @router.get("/submissions/{template_id}")
 def get_template_submission(template_id:int,db:Session=Depends(get_db),current_user:dict=Depends(get_current_user)):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "templates", "view")
     return fetch_template_submissions(
         db=db,
         template_id=template_id,
@@ -567,6 +615,8 @@ def get_template_response(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "templates", "view")
     return get_template_response_user(
         db=db,
         template_id=payload.template_id,

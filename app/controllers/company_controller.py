@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.helpers import get_current_user, employee_manage_guard, company_admin_guard
+from app.permissions import require_company_scope, require_menu_permission
 from app.schemas import (
     CreateDepartmentSchema,
     UpdateDeptSchema,
@@ -48,6 +49,8 @@ def add_department(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "departments", "add")
     company_admin_guard(current_user)
     return add_dept_service(payload, db, current_user)
 
@@ -58,7 +61,8 @@ def list_departments(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # company_admin_guard(current_user)
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "departments", "view")
     return get_dept_list(
         db,
         current_user,
@@ -66,7 +70,7 @@ def list_departments(
         size=payload.pagelimit,
         search=payload.search,
         status=payload.status,
-        showRecord=payload.showRecord
+        showRecord=payload.showRecord,
     )
 
 
@@ -76,6 +80,8 @@ def get_list_departments(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "departments", "view")
     company_admin_guard(current_user)
     return get_list_department(db, current_user, search=payload.search)
 
@@ -87,6 +93,8 @@ def update_department(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "departments", "edit")
     company_admin_guard(current_user)
     return update_dept_details(deptId, payload, db, current_user)
 
@@ -98,6 +106,8 @@ def update_department_status(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "departments", "edit")
     company_admin_guard(current_user)
     return updateStatusDept(deptId, payload.is_active, db, current_user)
 
@@ -108,6 +118,8 @@ def delete_department(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "departments", "delete")
     company_admin_guard(current_user)
     return delete_department_details(deptId, db, current_user)
 
@@ -121,6 +133,8 @@ def add_employee(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "employees", "add")
     employee_manage_guard(current_user)
     return add_employee_service(payload, db, current_user)
 
@@ -132,6 +146,8 @@ def update_employee(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "employees", "edit")
     employee_manage_guard(current_user)
     return update_employee_service(employee_id, payload, db, current_user)
 
@@ -142,6 +158,8 @@ def delete_employee(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "employees", "delete")
     employee_manage_guard(current_user)
     return delete_employee_details(empId, db, current_user)
 
@@ -152,6 +170,8 @@ def list_employees(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "employees", "view")
     employee_manage_guard(current_user)
     return get_employee_list(
         db,
@@ -169,10 +189,16 @@ def get_list_employees(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # employee_manage_guard(current_user)
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "employees", "view")
     return get_all_employees(db, current_user, query=payload.search)
 
 
 @router.get("/designations")
-def getDesignationList(db: Session = Depends(get_db)):
+def getDesignationList(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "employees", "view")
     return getDesignation(db=db)

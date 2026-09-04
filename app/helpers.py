@@ -16,6 +16,7 @@ from app.models import (
     DocumentVersion,
     AIDocument,
     ShareDocument,
+    Role,
 )
 from sqlalchemy.orm import Session
 from app.db import SessionLocal
@@ -128,9 +129,17 @@ def get_employee_scoped(db: Session, emp_id: int, current_user: dict):
     if current_user.get("is_department_head"):
         query = query.filter(User.department_id == current_user["department_id"])
     employee = query.first()
-    print("employee found:", employee)
     if not employee:
         raise HTTPException(404, "Employee not found or unauthorized")
+    # Also block Company Admin assigned via role_id
+    if employee.role_id:
+        assigned = (
+            db.query(Role)
+            .filter(Role.id == employee.role_id, Role.is_delete.is_(False))
+            .first()
+        )
+        if assigned and assigned.template_key == "COMPANY_ADMIN":
+            raise HTTPException(404, "Employee not found or unauthorized")
     return employee
 
 

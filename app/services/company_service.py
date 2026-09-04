@@ -662,6 +662,17 @@ def get_employee_list(
     size = max(size, 1)
     offset = (page - 1) * size
 
+    company_admin_role_ids = [
+        r.id
+        for r in db.query(Role.id)
+        .filter(
+            Role.company_id == current_user["company_id"],
+            Role.template_key == "COMPANY_ADMIN",
+            Role.is_delete.is_(False),
+        )
+        .all()
+    ]
+
     base_query = (
         db.query(
             User.id,
@@ -670,16 +681,25 @@ def get_employee_list(
             User.is_active,
             User.department_id,
             User.designation,
+            User.role_id,
+            Role.name.label("role_name"),
+            Role.is_editable.label("role_is_editable"),
             Department.name.label("department_name"),
         )
         .outerjoin(Department, Department.id == User.department_id)
+        .outerjoin(Role, Role.id == User.role_id)
         .filter(
             User.company_id == current_user["company_id"],
             User.is_delete.is_(False),
-            User.role == UserRole.EMPLOYEE,
+            User.role != UserRole.COMPANY_ADMIN,
+            User.role != UserRole.SYSTEM_ADMIN,
             User.id != current_user["user_id"],
         )
     )
+    if company_admin_role_ids:
+        base_query = base_query.filter(
+            or_(User.role_id.is_(None), ~User.role_id.in_(company_admin_role_ids))
+        )
 
     if current_user.get("is_department_head"):
         base_query = base_query.filter(
@@ -722,7 +742,16 @@ def get_employee_list(
                 "is_active": e.is_active,
                 "department_id": e.department_id,
                 "department_name": e.department_name,
-                "role": e.designation,
+                "designation": e.designation,
+                "role": (
+                    {
+                        "id": e.role_id,
+                        "name": e.role_name,
+                        "is_editable": e.role_is_editable,
+                    }
+                    if e.role_id
+                    else None
+                ),
             }
             for e in employees
         ],
@@ -730,19 +759,38 @@ def get_employee_list(
 
 def get_all_employees(db: Session, current_user: dict, query: str | None = None):
 
+    company_admin_role_ids = [
+        r.id
+        for r in db.query(Role.id)
+        .filter(
+            Role.company_id == current_user["company_id"],
+            Role.template_key == "COMPANY_ADMIN",
+            Role.is_delete.is_(False),
+        )
+        .all()
+    ]
+
     base_query = (
         db.query(
             User.id,
             User.name,
             User.email,
+            User.role_id,
+            Role.name.label("role_name"),
         )
+        .outerjoin(Role, Role.id == User.role_id)
         .filter(
             User.company_id == current_user["company_id"],
             User.is_delete.is_(False),
-            User.role == UserRole.EMPLOYEE,
+            User.role != UserRole.COMPANY_ADMIN,
+            User.role != UserRole.SYSTEM_ADMIN,
             User.id != current_user["user_id"],
         )
     )
+    if company_admin_role_ids:
+        base_query = base_query.filter(
+            or_(User.role_id.is_(None), ~User.role_id.in_(company_admin_role_ids))
+        )
 
     if current_user.get("is_department_head"):
         base_query = base_query.filter(
@@ -779,6 +827,11 @@ def get_all_employees(db: Session, current_user: dict, query: str | None = None)
                 "id": e.id,
                 "name": e.name,
                 "email": e.email,
+                "role": (
+                    {"id": e.role_id, "name": e.role_name}
+                    if e.role_id
+                    else None
+                ),
             }
             for e in employees
         ],

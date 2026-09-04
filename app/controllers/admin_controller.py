@@ -8,7 +8,6 @@ from app.services.admin_service import (
     delete_company_service,
     update_company_details,
 )
-from app.db import SessionLocal
 from app.schemas import (
     VerifyOTPSchema,
     CreateCompanySchema,
@@ -17,24 +16,23 @@ from app.schemas import (
     GetCompaniesRequest,
 )
 from sqlalchemy.orm import Session
-from app.helpers import get_current_user,get_db
-from app.enum import UserRole
+from app.helpers import get_current_user, get_db
+from app.permissions import require_menu_permission, require_system_scope
 
 router = APIRouter(prefix="/nodo")
 
-#below route is for request otp 
+
 @router.post("/request-otp")
 def request_otp(
     email: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
 ):
-    return request_otp_service( #calling function from service layer
+    return request_otp_service(
         email=email,
         background_tasks=background_tasks,
         db=db,
     )
 
 
-# this route is to verify otp
 @router.post("/verify-otp")
 def verify_otp(payload: VerifyOTPSchema, db: Session = Depends(get_db)):
     return verify_otp_service(email=payload.email, otp=payload.otp, db=db)
@@ -46,9 +44,8 @@ def addCompany(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user["role"] != UserRole.SYSTEM_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Unauthorized access!")
-
+    require_system_scope(current_user)
+    require_menu_permission(db, current_user, "companies", "add")
     return create_company_service(payload=payload, db=db, current_user=current_user)
 
 
@@ -58,9 +55,8 @@ def companiesList(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if current_user["role"] != UserRole.SYSTEM_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Unauthorized access!")
-
+    require_system_scope(current_user)
+    require_menu_permission(db, current_user, "companies", "view")
     return list_companies_service(
         db=db,
         current_user=current_user,
@@ -78,9 +74,8 @@ def updCompanyStatus(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if user["role"] != UserRole.SYSTEM_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Unauthorized access!")
-
+    require_system_scope(user)
+    require_menu_permission(db, user, "companies", "edit")
     return updateStatusCompany(
         companyId=companyId, is_active=payload.is_active, db=db, user=user
     )
@@ -90,10 +85,8 @@ def updCompanyStatus(
 def delete_company(
     companyId: int, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
-
-    if user["role"] != UserRole.SYSTEM_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Unauthorized access!")
-
+    require_system_scope(user)
+    require_menu_permission(db, user, "companies", "delete")
     return delete_company_service(companyId=companyId, db=db, user=user)
 
 
@@ -104,10 +97,8 @@ def update_company(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-
-    if user["role"] != UserRole.SYSTEM_ADMIN.value:
-
-        raise HTTPException(status_code=403, detail="Unauthorized access!")
+    require_system_scope(user)
+    require_menu_permission(db, user, "companies", "edit")
     return update_company_details(
         companyId=companyId, payload=payload, db=db, user=user
     )

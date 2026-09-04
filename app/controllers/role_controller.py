@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.helpers import get_current_user, get_db
+from app.permissions import require_menu_permission
 from app.schemas import RoleListRequest, RoleUpsertSchema
 from app.services.role_service import (
     create_role_service,
@@ -22,6 +23,7 @@ def list_roles(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_menu_permission(db, current_user, "role_management", "view")
     return list_roles_service(payload, db, current_user)
 
 
@@ -30,6 +32,7 @@ def list_modules(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_menu_permission(db, current_user, "role_management", "view")
     return list_modules_service(db, current_user)
 
 
@@ -38,6 +41,7 @@ def reporting_options(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_menu_permission(db, current_user, "role_management", "view")
     return reporting_options_service(db, current_user)
 
 
@@ -47,6 +51,7 @@ def get_role(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_menu_permission(db, current_user, "role_management", "view")
     return get_role_service(roleId, db, current_user)
 
 
@@ -56,6 +61,7 @@ def create_role(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_menu_permission(db, current_user, "role_management", "add")
     return create_role_service(payload, db, current_user)
 
 
@@ -66,6 +72,7 @@ def update_role(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_menu_permission(db, current_user, "role_management", "edit")
     return update_role_service(roleId, payload, db, current_user)
 
 
@@ -75,4 +82,5 @@ def delete_role(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_menu_permission(db, current_user, "role_management", "delete")
     return delete_role_service(roleId, db, current_user)

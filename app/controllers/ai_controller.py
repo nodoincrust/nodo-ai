@@ -7,7 +7,8 @@ from uuid import uuid4
 from threading import Thread
 import logging
 
-from app.helpers import get_db, run_summary_job
+from app.helpers import get_db, run_summary_job, get_current_user
+from app.permissions import require_company_scope, require_menu_permission
 from app.models import Document, DocumentVersion, AIDocument
 from app.services.ai_db_service import (
     getOrCreateSessionForDocument,
@@ -24,7 +25,15 @@ logger = logging.getLogger("ai.controller")
 
 
 @router.get("/chat")
-def chatApi(*, document_id: int, query: str):
+def chatApi(
+    *,
+    document_id: int,
+    query: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     if not document_id:
         raise HTTPException(400, "document_id is required")
 
@@ -45,11 +54,19 @@ def chatApi(*, document_id: int, query: str):
 
 
 @router.get("/chat/stream")
-def chatStreamApi(*, document_id: int, query: str):
+def chatStreamApi(
+    *,
+    document_id: int,
+    query: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """
     Streaming twin of /chat. Emits NDJSON so the answer appears as it is
     written instead of after the full generation. /chat is unchanged.
     """
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     if not document_id:
         raise HTTPException(400, "document_id is required")
 
@@ -75,7 +92,10 @@ def chatStreamApi(*, document_id: int, query: str):
 def start_summary(
     documentId: int = Path(..., description="Document ID to summarize"),
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     document = db.query(Document).filter(Document.id == documentId).first()
     if not document:
         raise HTTPException(404, "Document not found")
@@ -184,7 +204,10 @@ def get_summary(
     documentId: int,
     version: int | None = Query(None, description="Version number, defaults to latest"),
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     stored = getStoredSummary(db, document_id=documentId, version=version)
 
     if not stored:
@@ -197,7 +220,10 @@ def get_summary(
 def regenerate_summary(
     documentId: int,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "edit")
     document = db.query(Document).filter(Document.id == documentId).first()
     if not document:
         raise HTTPException(404, "Document not found")
@@ -236,7 +262,13 @@ def regenerate_summary(
 
 
 @router.get("/summary/status/{job_id}")
-def get_status(job_id: str):
+def get_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     job = jobs.get(job_id)
     if not job:
         return {"status": "not_found"}
@@ -245,9 +277,11 @@ def get_status(job_id: str):
 @router.get("/chat/history/{documentId}")
 def get_chat_history(
     documentId: int,
-   
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    require_company_scope(current_user)
+    require_menu_permission(db, current_user, "documents", "view")
     return fetchChatHistory(
         documentId=documentId,
-       
     )
